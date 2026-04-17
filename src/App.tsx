@@ -461,13 +461,23 @@ export default function App() {
                 )}
               </div>
               {pointA !== null && (
-                <div className="absolute top-0 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-20 group" style={{ left: `${(pointA / duration) * 100}%` }}>
+                <div 
+                  className="absolute top-0 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
+                  style={{ left: `${(pointA / duration) * 100}%` }}
+                  onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
+                  onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
+                >
                   <div className="text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-transform group-hover:scale-125 border" style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>A</div>
                   <div className="w-0.5 h-16" style={{ backgroundColor: colors.headline }}></div>
                 </div>
               )}
               {pointB !== null && (
-                <div className="absolute top-0 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-20 group" style={{ left: `${(pointB / duration) * 100}%` }}>
+                <div 
+                  className="absolute top-0 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
+                  style={{ left: `${(pointB / duration) * 100}%` }}
+                  onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
+                  onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
+                >
                   <div className="text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-transform group-hover:scale-125 border" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>B</div>
                   <div className="w-0.5 h-16" style={{ backgroundColor: colors.button }}></div>
                 </div>
