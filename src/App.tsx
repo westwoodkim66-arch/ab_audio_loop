@@ -413,7 +413,7 @@ export default function App() {
       {shareMessage && (
         <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-bounce" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>
           <Share2 className="w-5 h-5" />
-          {successMessage}
+          {shareMessage}
         </div>
       )}
 
