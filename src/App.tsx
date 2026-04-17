@@ -37,6 +37,7 @@ export default function App() {
   const [fileName, setFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [shareMessage, setShareMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const progressBarRef = useRef<HTMLDivElement | null>(null);
@@ -61,7 +62,21 @@ export default function App() {
     if (urlParam) {
       setAudioUrl(urlParam);
       setTimeout(() => {
-        if (audioRef.current) audioRef.current.load();
+        if (audioRef.current) {
+          audioRef.current.load();
+          // 如果有 A 點，預備載入後自動播放
+          if (aParam) {
+            const startA = parseFloat(aParam);
+            const onReady = () => {
+               if (audioRef.current) {
+                 audioRef.current.currentTime = startA;
+                 audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+                 audioRef.current.removeEventListener('loadedmetadata', onReady);
+               }
+            };
+            audioRef.current.addEventListener('loadedmetadata', onReady);
+          }
+        }
       }, 100);
     }
     if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
@@ -110,6 +125,8 @@ export default function App() {
       setAudioUrl(url);
       setFileName(file.name);
       setError('');
+      setSuccessMessage('音檔上傳成功！');
+      setTimeout(() => setSuccessMessage(''), 3000);
       setTimeout(() => {
         if (audioRef.current) audioRef.current.load();
       }, 0);
@@ -344,7 +361,7 @@ export default function App() {
     }
   };
 
-  const handleShare = () => {
+  const handleShare = async () => {
     if (!audioUrl) {
       setError('目前沒有可分享的音檔。');
       setTimeout(() => setError(''), 3000);
@@ -359,16 +376,29 @@ export default function App() {
     params.set('url', audioUrl);
     if (pointA !== null) params.set('a', pointA.toFixed(2));
     if (pointB !== null) params.set('b', pointB.toFixed(2));
-    const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    const longUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    
+    setShareMessage('正在產生短網址...');
+    
+    let finalUrl = longUrl;
+    try {
+      // 使用 is.gd 產生短網址
+      const response = await fetch(`https://is.gd/create.php?format=json&url=${encodeURIComponent(longUrl)}`);
+      const data = await response.json();
+      if (data.shorturl) finalUrl = data.shorturl;
+    } catch (err) {
+      console.warn('短網址產生失敗，改用原始網址');
+    }
+
     const textArea = document.createElement("textarea");
-    textArea.value = shareUrl;
+    textArea.value = finalUrl;
     textArea.style.position = "fixed";
     document.body.appendChild(textArea);
     textArea.focus();
     textArea.select();
     try {
       document.execCommand('copy');
-      setShareMessage('分享連結已複製！貼給朋友即可載入相同的設定。');
+      setShareMessage('短網址已複製到剪貼簿！');
       setTimeout(() => setShareMessage(''), 4000);
     } catch (err) {
       setError('複製失敗，請手動複製網址。');
@@ -383,7 +413,14 @@ export default function App() {
       {shareMessage && (
         <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-bounce" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>
           <Share2 className="w-5 h-5" />
-          {shareMessage}
+          {successMessage}
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-in fade-in slide-in-from-top-4" style={{ backgroundColor: colors.tertiary, color: colors.background, borderColor: colors.stroke }}>
+          <FileAudio className="w-5 h-5" />
+          {successMessage}
         </div>
       )}
 
@@ -434,7 +471,19 @@ export default function App() {
                 <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 opacity-40" />
                 <input type="text" placeholder="輸入音檔連結..." className="w-full pl-12 pr-4 py-4 outline-none focus:ring-2 transition-all border-none" style={{ backgroundColor: 'transparent', color: colors.headline }} value={audioUrl} onChange={(e) => { setAudioUrl(e.target.value); setFileName(''); }} />
               </div>
-              <button onClick={() => { if(audioRef.current) audioRef.current.load(); }} className="px-8 py-4 font-black transition-all hover:opacity-90 active:scale-95 whitespace-nowrap uppercase tracking-widest text-xs border" style={{ backgroundColor: 'transparent', color: colors.headline, borderColor: colors.headline }}>載入網址</button>
+              <button 
+                onClick={() => { 
+                  if(audioRef.current) {
+                    audioRef.current.load();
+                    setSuccessMessage('音檔網址載入成功！');
+                    setTimeout(() => setSuccessMessage(''), 3000);
+                  }
+                }} 
+                className="px-8 py-4 font-black transition-all hover:opacity-90 active:scale-95 whitespace-nowrap uppercase tracking-widest text-xs border" 
+                style={{ backgroundColor: 'transparent', color: colors.headline, borderColor: colors.headline }}
+              >
+                載入網址
+              </button>
             </div>
             {error && <div className="mt-1 text-red-400 text-sm flex items-center gap-2 px-2"><Info className="w-4 h-4 flex-shrink-0" /> {error}</div>}
           </div>
@@ -467,7 +516,9 @@ export default function App() {
                   onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
                   onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
                 >
-                  <div className="text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-transform group-hover:scale-125 border" style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>A</div>
+                  <div className={`text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-all border ${draggingMarker === 'A' ? 'scale-125 -translate-y-2' : 'group-hover:scale-125'}`} style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>
+                    {draggingMarker === 'A' ? formatTime(pointA) : 'A'}
+                  </div>
                   <div className="w-0.5 h-16" style={{ backgroundColor: colors.headline }}></div>
                 </div>
               )}
@@ -478,7 +529,9 @@ export default function App() {
                   onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
                   onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
                 >
-                  <div className="text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-transform group-hover:scale-125 border" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>B</div>
+                  <div className={`text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-all border ${draggingMarker === 'B' ? 'scale-125 -translate-y-2' : 'group-hover:scale-125'}`} style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>
+                    {draggingMarker === 'B' ? formatTime(pointB) : 'B'}
+                  </div>
                   <div className="w-0.5 h-16" style={{ backgroundColor: colors.button }}></div>
                 </div>
               )}
