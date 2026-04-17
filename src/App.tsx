@@ -61,23 +61,29 @@ export default function App() {
 
     if (urlParam) {
       setAudioUrl(urlParam);
-      setTimeout(() => {
-        if (audioRef.current) {
-          audioRef.current.load();
-          // 如果有 A 點，預備載入後自動播放
-          if (aParam) {
-            const startA = parseFloat(aParam);
-            const onReady = () => {
-               if (audioRef.current) {
-                 audioRef.current.currentTime = startA;
-                 audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-                 audioRef.current.removeEventListener('loadedmetadata', onReady);
-               }
-            };
-            audioRef.current.addEventListener('loadedmetadata', onReady);
+      
+      const setupAutoPlay = () => {
+        if (!audioRef.current) return;
+        
+        const startA = aParam ? parseFloat(aParam) : 0;
+        
+        const onCanPlay = () => {
+          if (audioRef.current) {
+            audioRef.current.currentTime = startA;
+            audioRef.current.play()
+              .then(() => setIsPlaying(true))
+              .catch((e) => console.warn('自動播放受瀏覽器限制，請點擊播放：', e));
           }
-        }
-      }, 100);
+        };
+
+        // 同時監聽多個事件以確保在不同瀏覽器都能觸發
+        audioRef.current.addEventListener('canplay', onCanPlay, { once: true });
+        audioRef.current.addEventListener('loadedmetadata', onCanPlay, { once: true });
+        audioRef.current.load();
+      };
+
+      // 稍微延遲確保 audioRef 已綁定
+      setTimeout(setupAutoPlay, 300);
     }
     if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
     if (bParam !== null && !isNaN(parseFloat(bParam))) setPointB(parseFloat(bParam));
