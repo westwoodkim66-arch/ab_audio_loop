@@ -105,18 +105,7 @@ export default function App() {
 
     if (urlParam) {
       setAudioUrl(urlParam);
-      
-      const setupAutoPlay = () => {
-        if (!playerRef.current) return;
-        
-        const startA = aParam ? parseFloat(aParam) : 0;
-        
-        // ReactPlayer doesn't use event listeners like native audio for 'canplay'
-        // Instead, we handle initial seek in onReady callback
-      };
-
-      // 稍微延遲確保 playerRef 已綁定
-      setTimeout(setupAutoPlay, 300);
+      setIsPlaying(true); // 分享連結進來後自動開始播放
     }
     if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
     if (bParam !== null && !isNaN(parseFloat(bParam))) setPointB(parseFloat(bParam));
