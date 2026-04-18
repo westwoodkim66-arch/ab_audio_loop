@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, Share2, Minus, Plus } from 'lucide-react';
+import ReactPlayer from 'react-player';
 
 export default function App() {
   // 配色方案常量 (根據附圖)
@@ -39,9 +40,14 @@ export default function App() {
   const [shareMessage, setShareMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playerRef = useRef<any>(null);
   const progressBarRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const isYouTube = useMemo(() => {
+    if (!audioUrl) return false;
+    return audioUrl.includes('youtube.com') || audioUrl.includes('youtu.be');
+  }, [audioUrl]);
 
   // 用來在長按 interval 中取得最新狀態，避免閉包問題
   const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled });
@@ -63,26 +69,15 @@ export default function App() {
       setAudioUrl(urlParam);
       
       const setupAutoPlay = () => {
-        if (!audioRef.current) return;
+        if (!playerRef.current) return;
         
         const startA = aParam ? parseFloat(aParam) : 0;
         
-        const onCanPlay = () => {
-          if (audioRef.current) {
-            audioRef.current.currentTime = startA;
-            audioRef.current.play()
-              .then(() => setIsPlaying(true))
-              .catch((e) => console.warn('自動播放受瀏覽器限制，請點擊播放：', e));
-          }
-        };
-
-        // 同時監聽多個事件以確保在不同瀏覽器都能觸發
-        audioRef.current.addEventListener('canplay', onCanPlay, { once: true });
-        audioRef.current.addEventListener('loadedmetadata', onCanPlay, { once: true });
-        audioRef.current.load();
+        // ReactPlayer doesn't use event listeners like native audio for 'canplay'
+        // Instead, we handle initial seek in onReady callback
       };
 
-      // 稍微延遲確保 audioRef 已綁定
+      // 稍微延遲確保 playerRef 已綁定
       setTimeout(setupAutoPlay, 300);
     }
     if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
@@ -133,9 +128,6 @@ export default function App() {
       setError('');
       setSuccessMessage('音檔上傳成功！');
       setTimeout(() => setSuccessMessage(''), 3000);
-      setTimeout(() => {
-        if (audioRef.current) audioRef.current.load();
-      }, 0);
     }
   };
 
@@ -151,9 +143,9 @@ export default function App() {
   useEffect(() => { setInputB(formatForInput(pointB)); }, [pointB]);
 
   const startPlaybackAtA = (targetA: number) => {
-    if (targetA !== null && audioRef.current) {
-      audioRef.current.currentTime = targetA;
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+    if (targetA !== null && playerRef.current) {
+      playerRef.current.seekTo(targetA, 'seconds');
+      setIsPlaying(true);
     }
   };
 
@@ -191,48 +183,22 @@ export default function App() {
   }, [draggingMarker, duration, pointA, pointB, isRepeatEnabled]);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const handleTimeUpdate = () => {
-      setCurrentTime(audio.currentTime);
-      if (isRepeatEnabled && pointA !== null && pointB !== null) {
-        if (audio.currentTime >= pointB) {
-          audio.currentTime = pointA;
-          if (!isPlaying) audio.play().then(() => setIsPlaying(true)).catch(() => {});
-        }
-      }
-    };
-    const handleLoadedMetadata = () => { setDuration(audio.duration); setError(''); };
-    const handleError = () => { 
-      setError('音檔載入失敗，請確認網址正確且為有效連結。'); 
-      setIsPlaying(false); 
-    };
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('error', handleError);
-    return () => {
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('error', handleError);
-    };
-  }, [pointA, pointB, isRepeatEnabled, isPlaying]);
+    if (isRepeatEnabled && pointA !== null && pointB !== null && currentTime >= pointB) {
+      startPlaybackAtA(pointA);
+    }
+  }, [currentTime, pointA, pointB, isRepeatEnabled]);
 
   const togglePlay = () => {
-    if (isPlaying) { 
-      audioRef.current?.pause(); 
-      setIsPlaying(false); 
-    } else {
-      if (!audioUrl) return;
-      audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-    }
+    if (!audioUrl) return;
+    setIsPlaying(!isPlaying);
   };
 
   const handleSeek = (e: React.MouseEvent) => {
-    if (!progressBarRef.current || !audioRef.current) return;
+    if (!progressBarRef.current || !playerRef.current) return;
     const rect = progressBarRef.current.getBoundingClientRect();
     const percent = Math.min(Math.max(0, (e.clientX - rect.left) / rect.width), 1);
     const newTime = percent * duration;
-    audioRef.current.currentTime = newTime;
+    playerRef.current.seekTo(newTime, 'seconds');
     setCurrentTime(newTime);
   };
 
@@ -299,7 +265,7 @@ export default function App() {
       newA = Math.max(0, newA);
       newA = Math.round(newA * 10) / 10;
       if (pB !== null && newA >= pB) newA = Math.max(0, pB - 0.1);
-      if (audioRef.current) audioRef.current.currentTime = newA;
+      playerRef.current?.seekTo(newA, 'seconds');
       return newA;
     });
   };
@@ -313,7 +279,7 @@ export default function App() {
       if (dur) newB = Math.min(dur, newB);
       newB = Math.round(newB * 10) / 10;
       if (pA !== null && newB <= pA) newB = pA + 0.1;
-      if (audioRef.current) audioRef.current.currentTime = newB;
+      playerRef.current?.seekTo(newB, 'seconds');
       return newB;
     });
   };
@@ -361,56 +327,70 @@ export default function App() {
     setRangeInput('');
   };
 
+  const Player = ReactPlayer as any;
+
   const skip = (amount: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime += amount;
+    if (playerRef.current) {
+      playerRef.current.seekTo(currentTime + amount, 'seconds');
     }
   };
 
   const handleShare = async () => {
     if (!audioUrl) {
-      setError('目前沒有可分享的音檔。');
-      setTimeout(() => setError(''), 3000);
+      window.alert('目前沒有可分享的音檔。');
       return;
     }
     if (audioUrl.startsWith('blob:')) {
-      setError('本機上傳的音檔無法透過連結分享，請使用「音檔來源網址」載入網路檔案。');
-      setTimeout(() => setError(''), 4500);
+      window.alert('本機上傳的音檔無法透過連結分享，請使用「音檔來源網址」載入網路檔案。');
       return;
     }
+
     const params = new URLSearchParams();
     params.set('url', audioUrl);
     if (pointA !== null) params.set('a', pointA.toFixed(2));
     if (pointB !== null) params.set('b', pointB.toFixed(2));
+
+    window.history.replaceState(null, '', `?${params.toString()}`);
     const longUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
-    
-    setShareMessage('正在產生短網址...');
-    
-    let finalUrl = longUrl;
+
+    let copySuccess = false;
     try {
-      // 使用 is.gd 產生短網址
-      const response = await fetch(`https://is.gd/create.php?format=json&url=${encodeURIComponent(longUrl)}`);
-      const data = await response.json();
-      if (data.shorturl) finalUrl = data.shorturl;
-    } catch (err) {
-      console.warn('短網址產生失敗，改用原始網址');
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(longUrl);
+        copySuccess = true;
+      }
+    } catch (e) {
+      console.warn('Clipboard failed');
     }
 
-    const textArea = document.createElement("textarea");
-    textArea.value = finalUrl;
-    textArea.style.position = "fixed";
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    try {
-      document.execCommand('copy');
-      setShareMessage('短網址已複製到剪貼簿！');
-      setTimeout(() => setShareMessage(''), 4000);
-    } catch (err) {
-      setError('複製失敗，請手動複製網址。');
-      setTimeout(() => setError(''), 3000);
+    if (!copySuccess) {
+      try {
+        const textArea = document.createElement("textarea");
+        textArea.value = longUrl;
+        textArea.style.position = "fixed";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        copySuccess = true;
+      } catch (err) {
+        console.warn('ExecCommand failed');
+      }
     }
-    document.body.removeChild(textArea);
+
+    const isDev = window.location.hostname.includes('ais-dev-');
+
+    if (copySuccess) {
+      if (isDev) {
+        window.alert(`✅ 網址已產生並複製！\n\n⚠️ 注意：您分享的是「私人開發環境」網址，朋友可能無法打開這個連結。\n💡 建議做法：點擊頁面最右上角的「Share」按鈕發布為「公開 App」後，在公開頁面內複製分享才能正常開啟！\n\n您的專屬連結為：\n${longUrl}`);
+      } else {
+        setShareMessage('✅ 網址已複製！您的朋友可以直接透過此連結開啟。');
+        setTimeout(() => setShareMessage(''), 4000);
+      }
+    } else {
+      window.prompt((isDev ? '⚠️ 由於您在私人開發環境，這個連結朋友可能打不開 (建議先點右上角 Share 發布)。\n\n' : '') + '您的瀏覽器環境無法自動複製，請手動複製以下專屬分享網址：', longUrl);
+    }
   };
 
   return (
@@ -475,26 +455,52 @@ export default function App() {
             <div className="flex gap-3">
               <div className="relative flex-grow border" style={{ borderColor: colors.stroke }}>
                 <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 opacity-40" />
-                <input type="text" placeholder="輸入音檔連結..." className="w-full pl-12 pr-4 py-4 outline-none focus:ring-2 transition-all border-none" style={{ backgroundColor: 'transparent', color: colors.headline }} value={audioUrl} onChange={(e) => { setAudioUrl(e.target.value); setFileName(''); }} />
+                <input type="text" placeholder="輸入音檔或 YouTube 連結..." className="w-full pl-12 pr-4 py-4 outline-none focus:ring-2 transition-all border-none" style={{ backgroundColor: 'transparent', color: colors.headline }} value={audioUrl} onChange={(e) => { setAudioUrl(e.target.value); setFileName(''); }} />
               </div>
               <button 
                 onClick={() => { 
-                  if(audioRef.current) {
-                    audioRef.current.load();
-                    setSuccessMessage('音檔網址載入成功！');
+                  if(playerRef.current) {
+                    setSuccessMessage('連結載入成功！');
                     setTimeout(() => setSuccessMessage(''), 3000);
                   }
                 }} 
                 className="px-8 py-4 font-black transition-all hover:opacity-90 active:scale-95 whitespace-nowrap uppercase tracking-widest text-xs border" 
                 style={{ backgroundColor: 'transparent', color: colors.headline, borderColor: colors.headline }}
               >
-                載入網址
+                載入連結
               </button>
             </div>
             {error && <div className="mt-1 text-red-400 text-sm flex items-center gap-2 px-2"><Info className="w-4 h-4 flex-shrink-0" /> {error}</div>}
           </div>
 
-          <audio ref={audioRef} src={audioUrl || undefined} preload="auto" hidden />
+          <div className={`mb-10 overflow-hidden transition-all duration-500 border ${isYouTube ? 'shadow-2xl h-auto opacity-100' : 'h-0 opacity-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
+            <div className="aspect-video w-full">
+               <Player
+                 ref={playerRef}
+                 url={audioUrl}
+                 playing={isPlaying}
+                 volume={volume}
+                 onProgress={(state: any) => setCurrentTime(state.playedSeconds)}
+                 onDuration={(dur: number) => setDuration(dur)}
+                 onReady={() => {
+                   const params = new URLSearchParams(window.location.search);
+                   const aParam = params.get('a');
+                   if (aParam && playerRef.current) {
+                     playerRef.current.seekTo(parseFloat(aParam), 'seconds');
+                   }
+                   setSuccessMessage(isYouTube ? 'YouTube 影片載入成功！' : '音檔載入成功！');
+                   setTimeout(() => setSuccessMessage(''), 3000);
+                 }}
+                 onError={() => setError('載入失敗，請確認網址正確且為有效連結。')}
+                 width="100%"
+                 height="100%"
+                 style={{ backgroundColor: '#000' }}
+                 config={{
+                   youtube: { playerVars: { origin: window.location.origin } } as any
+                 }}
+               />
+            </div>
+          </div>
 
           <div className="p-8 mb-10 border shadow-inner" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
             <div className="flex justify-between items-end mb-6">
@@ -504,7 +510,7 @@ export default function App() {
               </div>
               <div className="flex items-center gap-3">
                 <Volume2 className="w-5 h-5 opacity-50" />
-                <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); if(audioRef.current) audioRef.current.volume = v; }} className="w-24 h-1 appearance-none cursor-pointer accent-[#7f5af0]" style={{ backgroundColor: colors.stroke }} />
+                <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-24 h-1 appearance-none cursor-pointer accent-[#7f5af0]" style={{ backgroundColor: colors.stroke }} />
               </div>
             </div>
 
