@@ -40,6 +40,10 @@ export default function App() {
   const [shareMessage, setShareMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  const [previewTime, setPreviewTime] = useState<number | null>(null);
+  const [isHoveringBar, setIsHoveringBar] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+
   const playerRef = useRef<any>(null);
   const progressBarRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -49,11 +53,45 @@ export default function App() {
     return audioUrl.includes('youtube.com') || audioUrl.includes('youtu.be');
   }, [audioUrl]);
 
-  // 用來在長按 interval 中取得最新狀態，避免閉包問題
-  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled });
+  // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
+  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying });
   useEffect(() => {
-    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled };
-  }, [pointA, pointB, currentTime, duration, isRepeatEnabled]);
+    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying };
+  }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying]);
+
+  // 鍵盤快捷鍵處理
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 如果正在輸入框、或是按下組合鍵（如 Ctrl+S），則不觸發
+      const activeElement = document.activeElement;
+      const isInput = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || (activeElement as HTMLElement).isContentEditable);
+      if (isInput) return;
+
+      const { audioUrl: currentUrl, currentTime: currentPos } = stateRef.current;
+
+      if (e.code === 'Space') {
+        // 空白鍵：暫停/播放
+        if (!currentUrl) return;
+        e.preventDefault();
+        setIsPlaying(prev => !prev);
+      } else if (e.code === 'ArrowLeft') {
+        // 左鍵：倒退 5 秒
+        e.preventDefault();
+        if (playerRef.current) {
+          playerRef.current.seekTo(currentPos - 5, 'seconds');
+        }
+      } else if (e.code === 'ArrowRight') {
+        // 右鍵：快轉 5 秒
+        e.preventDefault();
+        if (playerRef.current) {
+          playerRef.current.seekTo(currentPos + 5, 'seconds');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const holdTimer = useRef<NodeJS.Timeout | null>(null);
   const holdInterval = useRef<NodeJS.Timeout | null>(null);
@@ -193,14 +231,59 @@ export default function App() {
     setIsPlaying(!isPlaying);
   };
 
-  const handleSeek = (e: React.MouseEvent) => {
-    if (!progressBarRef.current || !playerRef.current) return;
+  const handleProgressBarInteraction = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!progressBarRef.current || !playerRef.current || duration === 0) return;
     const rect = progressBarRef.current.getBoundingClientRect();
-    const percent = Math.min(Math.max(0, (e.clientX - rect.left) / rect.width), 1);
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+    const percent = Math.min(Math.max(0, (clientX - rect.left) / rect.width), 1);
     const newTime = percent * duration;
-    playerRef.current.seekTo(newTime, 'seconds');
-    setCurrentTime(newTime);
+    setPreviewTime(newTime);
+    return { newTime, percent };
   };
+
+  const handleSeek = (e: React.MouseEvent) => {
+    const result = handleProgressBarInteraction(e);
+    if (result && playerRef.current) {
+      playerRef.current.seekTo(result.newTime, 'seconds');
+      setCurrentTime(result.newTime);
+    }
+  };
+
+  const onProgressMouseMove = (e: React.MouseEvent) => {
+    const result = handleProgressBarInteraction(e);
+    if (result) setPreviewTime(result.newTime);
+  };
+
+  const onProgressMouseDown = (e: React.MouseEvent) => {
+    setIsScrubbing(true);
+    handleSeek(e);
+  };
+
+  useEffect(() => {
+    const handleGlobalMove = (e: MouseEvent) => {
+      if (!isScrubbing || !progressBarRef.current) return;
+      const rect = progressBarRef.current.getBoundingClientRect();
+      const percent = Math.min(Math.max(0, (e.clientX - rect.left) / rect.width), 1);
+      const newTime = percent * duration;
+      setPreviewTime(newTime);
+      if (playerRef.current) {
+        playerRef.current.seekTo(newTime, 'seconds');
+        setCurrentTime(newTime);
+      }
+    };
+    const handleGlobalUp = () => {
+      setIsScrubbing(false);
+    };
+
+    if (isScrubbing) {
+      window.addEventListener('mousemove', handleGlobalMove);
+      window.addEventListener('mouseup', handleGlobalUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMove);
+      window.removeEventListener('mouseup', handleGlobalUp);
+    };
+  }, [isScrubbing, duration]);
 
   const setA = () => { 
     setPointA(currentTime); 
@@ -353,10 +436,21 @@ export default function App() {
     window.history.replaceState(null, '', `?${params.toString()}`);
     const longUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 
+    // 使用 TinyURL API 縮短網址
+    let finalUrl = longUrl;
+    try {
+      const response = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`);
+      if (response.ok) {
+        finalUrl = await response.text();
+      }
+    } catch (e) {
+      console.warn('Shorten URL failed, using long version');
+    }
+
     let copySuccess = false;
     try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(longUrl);
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(finalUrl);
         copySuccess = true;
       }
     } catch (e) {
@@ -366,7 +460,7 @@ export default function App() {
     if (!copySuccess) {
       try {
         const textArea = document.createElement("textarea");
-        textArea.value = longUrl;
+        textArea.value = finalUrl;
         textArea.style.position = "fixed";
         document.body.appendChild(textArea);
         textArea.focus();
@@ -383,13 +477,13 @@ export default function App() {
 
     if (copySuccess) {
       if (isDev) {
-        window.alert(`✅ 網址已產生並複製！\n\n⚠️ 注意：您分享的是「私人開發環境」網址，朋友可能無法打開這個連結。\n💡 建議做法：點擊頁面最右上角的「Share」按鈕發布為「公開 App」後，在公開頁面內複製分享才能正常開啟！\n\n您的專屬連結為：\n${longUrl}`);
+        window.alert(`✅ 短網址已產生並複製！\n\n⚠️ 注意：您分享的是「私人開發環境」網址，朋友可能無法打開這個連結。\n💡 建議做法：點擊頁面最右上角的「Share」按鈕發布為「公開 App」後，在公開頁面內產生的連結才能正常開啟！\n\n您的專屬連結為：\n${finalUrl}`);
       } else {
-        setShareMessage('✅ 網址已複製！您的朋友可以直接透過此連結開啟。');
+        setShareMessage('✅ 短網址已複製！您的朋友可以直接透過此連結開啟。');
         setTimeout(() => setShareMessage(''), 4000);
       }
     } else {
-      window.prompt((isDev ? '⚠️ 由於您在私人開發環境，這個連結朋友可能打不開 (建議先點右上角 Share 發布)。\n\n' : '') + '您的瀏覽器環境無法自動複製，請手動複製以下專屬分享網址：', longUrl);
+      window.prompt((isDev ? '⚠️ 由於您在私人開發環境，這個連結朋友可能打不開 (建議先點右上角 Share 發布)。\n\n' : '') + '您的瀏覽器環境無法自動複製，請手動複製以下短網址：', finalUrl);
     }
   };
 
@@ -514,13 +608,42 @@ export default function App() {
               </div>
             </div>
 
-            <div className="relative h-16 flex items-center">
-              <div ref={progressBarRef} onClick={handleSeek} className="relative w-full h-4 cursor-pointer overflow-hidden shadow-inner" style={{ backgroundColor: colors.stroke }}>
-                <div className="absolute top-0 left-0 h-full opacity-30 transition-all" style={{ width: `${(currentTime / duration) * 100}%`, backgroundColor: colors.button }} />
+            <div className="relative h-20 flex items-center">
+              <div 
+                ref={progressBarRef} 
+                onMouseDown={onProgressMouseDown}
+                onMouseMove={onProgressMouseMove}
+                onMouseEnter={() => setIsHoveringBar(true)}
+                onMouseLeave={() => { if (!isScrubbing) { setIsHoveringBar(false); setPreviewTime(null); } }}
+                className="relative w-full h-4 cursor-pointer overflow-hidden shadow-inner group/bar" 
+                style={{ backgroundColor: colors.stroke }}
+              >
+                {/* 預覽條 (滑鼠移入或按住時顯示) */}
+                {previewTime !== null && (
+                  <div 
+                    className="absolute top-0 left-0 h-full opacity-20 pointer-events-none transition-all duration-75" 
+                    style={{ width: `${(previewTime / duration) * 100}%`, backgroundColor: colors.button }} 
+                  />
+                )}
+                
+                {/* 當前進度 */}
+                <div className="absolute top-0 left-0 h-full opacity-40 transition-all pointer-events-none" style={{ width: `${(currentTime / duration) * 100}%`, backgroundColor: colors.button }} />
+                
+                {/* AB 區間填充 */}
                 {pointA !== null && pointB !== null && (
-                  <div className="absolute top-0 h-full opacity-40" style={{ left: `${(pointA / duration) * 100}%`, width: `${((pointB - pointA) / duration) * 100}%`, backgroundColor: colors.tertiary }} />
+                  <div className="absolute top-0 h-full opacity-30" style={{ left: `${(pointA / duration) * 100}%`, width: `${((pointB - pointA) / duration) * 100}%`, backgroundColor: colors.tertiary }} />
                 )}
               </div>
+
+              {/* 預覽時間標籤 (懸浮) */}
+              {(isHoveringBar || isScrubbing) && previewTime !== null && (
+                <div 
+                  className={`absolute bottom-full mb-2 -translate-x-1/2 pointer-events-none px-2 py-1 text-[10px] font-mono font-bold shadow-xl border z-50 animate-in fade-in zoom-in-95 duration-200 ${isScrubbing ? 'scale-110' : ''}`}
+                  style={{ left: `${(previewTime / duration) * 100}%`, backgroundColor: isScrubbing ? colors.button : colors.background, color: colors.headline, borderColor: isScrubbing ? colors.headline : colors.stroke }}
+                >
+                  {formatTime(previewTime)}
+                </div>
+              )}
               {pointA !== null && (
                 <div 
                   className="absolute top-0 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
@@ -562,28 +685,28 @@ export default function App() {
                 <div className="flex flex-col gap-2">
                   <span className="text-[10px] font-black uppercase tracking-widest opacity-50 px-2">起點 A</span>
                   <div className="flex items-center w-full overflow-hidden touch-none border" style={{ backgroundColor: 'transparent', color: colors.headline, borderColor: colors.stroke }}>
-                    <button {...getHoldHandlers('A', -0.1)} className="p-3 hover:bg-white hover:bg-opacity-10 active:bg-opacity-20 transition-all focus:outline-none select-none"><Minus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <button {...getHoldHandlers('A', -0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Minus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
                     <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="w-full text-center font-mono text-lg font-bold py-3 border-none outline-none bg-transparent min-w-0 px-0" />
-                    <button {...getHoldHandlers('A', 0.1)} className="p-3 hover:bg-white hover:bg-opacity-10 active:bg-opacity-20 transition-all focus:outline-none select-none"><Plus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <button {...getHoldHandlers('A', 0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Plus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
                   </div>
-                  <button onClick={setA} className="py-2 text-xs font-bold transition-all hover:bg-opacity-80 border" style={{ borderColor: colors.stroke, color: colors.headline }}>📍 抓取當前</button>
+                  <button onClick={setA} className="py-2 text-xs font-bold transition-all hover:opacity-80 border" style={{ borderColor: colors.stroke, color: colors.headline }}>📍 抓取當前</button>
                 </div>
                 <div className="flex flex-col gap-2">
                   <span className="text-[10px] font-black uppercase tracking-widest opacity-50 px-2">終點 B</span>
                   <div className="flex items-center w-full overflow-hidden touch-none border" style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.stroke }}>
-                    <button {...getHoldHandlers('B', -0.1)} className="p-3 hover:bg-white hover:bg-opacity-10 active:bg-opacity-20 transition-all focus:outline-none select-none"><Minus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <button {...getHoldHandlers('B', -0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Minus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
                     <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="w-full text-center font-mono text-lg font-bold py-3 border-none outline-none bg-transparent min-w-0 px-0" />
-                    <button {...getHoldHandlers('B', 0.1)} className="p-3 hover:bg-white hover:bg-opacity-10 active:bg-opacity-20 transition-all focus:outline-none select-none"><Plus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <button {...getHoldHandlers('B', 0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Plus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
                   </div>
-                  <button onClick={setB} className="py-2 text-xs font-bold transition-all hover:bg-opacity-80 border" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>📍 抓取當前</button>
+                  <button onClick={setB} className="py-2 text-xs font-bold transition-all hover:opacity-80 border" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>📍 抓取當前</button>
                 </div>
               </div>
 
               <div className="flex flex-col gap-4">
                 <div className="flex gap-3 h-full items-end">
                   <button onClick={() => setIsRepeatEnabled(!isRepeatEnabled)} className={`flex-grow py-3 font-bold transition-all border ${isRepeatEnabled ? '' : 'opacity-40'}`} style={{ backgroundColor: isRepeatEnabled ? colors.button : 'transparent', color: isRepeatEnabled ? colors.buttonText : colors.paragraph, borderColor: colors.button }}>重複播放: {isRepeatEnabled ? 'ON' : 'OFF'}</button>
-                  <button onClick={clearAB} title="清除標記" className="p-3 transition-all border hover:bg-red-900 hover:bg-opacity-20" style={{ borderColor: colors.stroke, color: colors.headline }}><Trash2 className="w-6 h-6" /></button>
-                  <button onClick={handleShare} title="產生分享連結" className="p-3 transition-all border hover:bg-opacity-20 hover:bg-white" style={{ borderColor: colors.stroke, color: colors.headline }}><Share2 className="w-6 h-6" /></button>
+                  <button onClick={clearAB} title="清除標記" className="p-3 transition-all border hover:bg-red-900/40 hover:text-red-400" style={{ borderColor: colors.stroke, color: colors.headline }}><Trash2 className="w-6 h-6" /></button>
+                  <button onClick={handleShare} title="產生分享連結" className="p-3 transition-all border hover:bg-white/20" style={{ borderColor: colors.stroke, color: colors.headline }}><Share2 className="w-6 h-6" /></button>
                 </div>
                 <div className="flex gap-2 items-center p-2 border" style={{ backgroundColor: 'transparent', borderColor: colors.stroke }}>
                    <span className="text-[10px] font-black uppercase tracking-widest opacity-60 px-2 whitespace-nowrap" style={{ color: colors.headline }}>快速區間:</span>
