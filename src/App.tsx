@@ -34,6 +34,8 @@ export default function App() {
   const [rangeInput, setRangeInput] = useState('');
   const [isRepeatEnabled, setIsRepeatEnabled] = useState(true);
   const [error, setError] = useState('');
+  const lastLoadedUrl = useRef('');
+  const [showAutoplayOverlay, setShowAutoplayOverlay] = useState(false);
   const [draggingMarker, setDraggingMarker] = useState<string | null>(null);
   const [fileName, setFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -105,7 +107,9 @@ export default function App() {
 
     if (urlParam) {
       setAudioUrl(urlParam);
-      setIsPlaying(true); // 分享連結進來後自動開始播放
+      setIsPlaying(true); // 分享連結進來後嘗試自動播放
+      // 標註為由分享進入，若被瀏覽器擋住自動播放則顯示提示
+      setShowAutoplayOverlay(true);
     }
     if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
     if (bParam !== null && !isNaN(parseFloat(bParam))) setPointB(parseFloat(bParam));
@@ -538,13 +542,25 @@ export default function App() {
             <div className="flex gap-3">
               <div className="relative flex-grow border" style={{ borderColor: colors.stroke }}>
                 <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 opacity-40" />
-                <input type="text" placeholder="輸入音檔或 YouTube 連結..." className="w-full pl-12 pr-4 py-4 outline-none focus:ring-2 transition-all border-none" style={{ backgroundColor: 'transparent', color: colors.headline }} value={audioUrl} onChange={(e) => { setAudioUrl(e.target.value); setFileName(''); }} />
+                <input 
+                  type="text" 
+                  placeholder="輸入音檔或 YouTube 連結..." 
+                  className="w-full pl-12 pr-4 py-4 outline-none focus:ring-2 transition-all border-none" 
+                  style={{ backgroundColor: 'transparent', color: colors.headline }} 
+                  value={audioUrl} 
+                  onChange={(e) => { 
+                    setAudioUrl(e.target.value); 
+                    setFileName(''); 
+                    setError(''); // 清除錯誤
+                  }} 
+                />
               </div>
               <button 
                 onClick={() => { 
+                  setError('');
                   if(playerRef.current) {
-                    setSuccessMessage('連結載入成功！');
-                    setTimeout(() => setSuccessMessage(''), 3000);
+                    setSuccessMessage('準備載入中...');
+                    setTimeout(() => setSuccessMessage(''), 2000);
                   }
                 }} 
                 className="px-8 py-4 font-black transition-all hover:opacity-90 active:scale-95 whitespace-nowrap uppercase tracking-widest text-xs border" 
@@ -556,34 +572,74 @@ export default function App() {
             {error && <div className="mt-1 text-red-400 text-sm flex items-center gap-2 px-2"><Info className="w-4 h-4 flex-shrink-0" /> {error}</div>}
           </div>
 
-          <div className={`mb-10 overflow-hidden transition-all duration-500 border ${isYouTube ? 'shadow-2xl h-auto opacity-100' : 'h-0 opacity-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
+          <div className={`mb-10 overflow-hidden transition-all duration-500 border ${isYouTube ? 'shadow-2xl h-auto opacity-100' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
             <div className="aspect-video w-full">
                <Player
                  ref={playerRef}
                  url={audioUrl}
                  playing={isPlaying}
                  volume={volume}
-                 onProgress={(state: any) => setCurrentTime(state.playedSeconds)}
+                 onProgress={(state: any) => {
+                   setCurrentTime(state.playedSeconds);
+                   // 如果正在播放且時間在動，隱藏自動播放提示
+                   if (state.playedSeconds > 0 && showAutoplayOverlay) {
+                     setShowAutoplayOverlay(false);
+                   }
+                 }}
                  onDuration={(dur: number) => setDuration(dur)}
                  onReady={() => {
+                   // 防止重複觸發成功的提示
+                   if (lastLoadedUrl.current === audioUrl) return;
+                   lastLoadedUrl.current = audioUrl;
+
                    const params = new URLSearchParams(window.location.search);
                    const aParam = params.get('a');
                    if (aParam && playerRef.current) {
                      playerRef.current.seekTo(parseFloat(aParam), 'seconds');
                    }
+                   setError(''); // 載入成功則清除錯誤
                    setSuccessMessage(isYouTube ? 'YouTube 影片載入成功！' : '音檔載入成功！');
                    setTimeout(() => setSuccessMessage(''), 3000);
                  }}
-                 onError={() => setError('載入失敗，請確認網址正確且為有效連結。')}
+                 onError={() => {
+                   // 如果是 YouTube 且網址為空，不報錯
+                   if (!audioUrl) return;
+                   setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
+                   setSuccessMessage('');
+                 }}
                  width="100%"
                  height="100%"
                  style={{ backgroundColor: '#000' }}
                  config={{
-                   youtube: { playerVars: { origin: window.location.origin } } as any
+                   youtube: { playerVars: { origin: window.location.origin, autoplay: 1 } } as any
                  }}
                />
             </div>
           </div>
+
+          {/* 自動播放被擋住時的顯示 */}
+          {showAutoplayOverlay && audioUrl && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-6 text-center animate-in fade-in duration-500">
+              <div className="max-w-sm">
+                 <div className="w-20 h-20 bg-[#7f5af0] rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(127,90,240,0.5)] animate-pulse">
+                   <Play className="w-10 h-10 text-white translate-x-1" />
+                 </div>
+                 <h2 className="text-2xl font-bold mb-3" style={{ color: colors.headline }}>分享連結已載入</h2>
+                 <p className="opacity-60 mb-8" style={{ color: colors.paragraph }}>由於瀏覽器限制，請點擊下方按鈕開始體驗 A-B 重複播放內容</p>
+                 <button 
+                   onClick={() => {
+                     setIsPlaying(true);
+                     setShowAutoplayOverlay(false);
+                     if (playerRef.current) playerRef.current.getInternalPlayer()?.play?.();
+                   }}
+                   className="w-full py-4 rounded-xl font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
+                   style={{ backgroundColor: colors.button, color: colors.buttonText }}
+                 >
+                   立即開始
+                 </button>
+              </div>
+            </div>
+          )}
 
           <div className="p-8 mb-10 border shadow-inner" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
             <div className="flex justify-between items-end mb-6">
