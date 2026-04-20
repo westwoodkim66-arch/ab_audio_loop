@@ -113,10 +113,12 @@ export default function App() {
 
   // 初始化：檢查網址參數是否有分享進來的設定
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlParam = params.get('url');
-    const aParam = params.get('a');
-    const bParam = params.get('b');
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    
+    const urlParam = searchParams.get('url') || hashParams.get('url');
+    const aParam = searchParams.get('a') || hashParams.get('a');
+    const bParam = searchParams.get('b') || hashParams.get('b');
 
     if (urlParam) {
       setAudioUrl(urlParam);
@@ -459,13 +461,16 @@ export default function App() {
     if (pointB !== null) params.set('b', pointB.toFixed(2));
 
     try {
-      window.history.replaceState(null, '', `?${params.toString()}`);
+      const url = new URL(window.location.href);
+      url.search = ""; 
+      url.hash = params.toString();
+      window.history.replaceState(null, '', url.toString());
     } catch (e) {
       console.warn('History replace failed');
     }
 
     const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
-    const longUrl = `${origin}${window.location.pathname}?${params.toString()}`;
+    const longUrl = `${origin}${window.location.pathname}#${params.toString()}`;
 
     let finalUrl = longUrl;
     
@@ -696,8 +701,9 @@ export default function App() {
                    if (lastLoadedUrl.current === audioUrl) return;
                    lastLoadedUrl.current = audioUrl;
 
-                   const params = new URLSearchParams(window.location.search);
-                   const aParam = params.get('a');
+                   const searchParams = new URLSearchParams(window.location.search);
+                   const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                   const aParam = searchParams.get('a') || hashParams.get('a');
                    if (aParam && playerRef.current) {
                      playerRef.current.seekTo(parseFloat(aParam), 'seconds');
                    }
