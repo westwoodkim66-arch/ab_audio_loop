@@ -38,7 +38,7 @@ export default function App() {
   const [draggingMarker, setDraggingMarker] = useState<string | null>(null);
   const [fileName, setFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
-  const [shareMessage, setShareMessage] = useState('');
+  const [shareData, setShareData] = useState<{isOpen: boolean, url: string, status: 'idle' | 'loading' | 'success'} | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
 
   const [previewTime, setPreviewTime] = useState<number | null>(null);
@@ -433,18 +433,19 @@ export default function App() {
 
   const handleShare = async () => {
     if (!audioUrl) {
-      setShareMessage('❌ 目前沒有可分享的音檔。');
-      setTimeout(() => setShareMessage(''), 3000);
+      setShareData({ isOpen: true, url: '', status: 'idle' });
+      // Temporary toast replacement:
+      alert("❌ 目前沒有可分享的音檔。");
+      setShareData(null);
       return;
     }
     if (audioUrl.startsWith('blob:')) {
-      setShareMessage('❌ 本機上傳的音檔無法直接分享，請使用網路連結。');
-      setTimeout(() => setShareMessage(''), 4000);
+      alert("❌ 本機上傳的音檔無法直接分享，請使用網路連結。");
       return;
     }
 
-    // 立即顯示反應狀態，避免手機版使用者跳轉等待感
-    setShareMessage('🔗 正在產生短網址...');
+    // 立即顯示載入彈窗
+    setShareData({ isOpen: true, url: '', status: 'loading' });
 
     const params = new URLSearchParams();
     params.set('url', audioUrl);
@@ -485,53 +486,95 @@ export default function App() {
       console.warn('Shorten URL failed or timeout, using long version');
     }
 
+    setShareData({ isOpen: true, url: finalUrl, status: 'success' });
+  };
+
+  const copyToClipboard = (text: string) => {
     let copySuccess = false;
-    
-    // 優先使用新版 Clipboard API
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(finalUrl);
+        navigator.clipboard.writeText(text);
         copySuccess = true;
       }
     } catch (e) {
-      console.warn('Clipboard API failed, trying legacy method');
+      console.warn('Clipboard API failed', e);
     }
-
-    // 備案：舊版 execCommand 複製
+    
     if (!copySuccess) {
       try {
         const textArea = document.createElement("textarea");
-        textArea.value = finalUrl;
+        textArea.value = text;
         textArea.style.position = "fixed";
         textArea.style.left = "-9999px";
         textArea.style.top = "0";
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-        textArea.setSelectionRange(0, 99999); // 針對手機端強化選取
+        textArea.setSelectionRange(0, 99999);
         copySuccess = document.execCommand('copy');
         document.body.removeChild(textArea);
       } catch (err) {
         console.warn('Legacy copy failed');
       }
     }
-
+    
     if (copySuccess) {
-      setShareMessage('✅ 短網址已複製到剪貼簿！');
+      alert("✅ 已成功複製到剪貼簿！");
+      setShareData(null);
     } else {
-      // 若連複製都失敗，則顯示網址讓使用者可以長按選取
-      setShareMessage(`✅ 網址已產生，請長按複製: ${finalUrl}`);
+      alert("❌ 複製失敗，請手動長按選取網址。");
     }
-    setTimeout(() => setShareMessage(''), 6000);
   };
 
   return (
     <div className="min-h-screen flex flex-col items-center py-12 px-4 font-sans relative" style={{ backgroundColor: colors.background, color: colors.paragraph }}>
       
-      {shareMessage && (
-        <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-bounce" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>
-          <Share2 className="w-5 h-5" />
-          {shareMessage}
+      {shareData?.isOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 mobile-touch-none">
+          <div className="max-w-md w-full rounded-2xl border aspect-video flex flex-col justify-center items-center shadow-2xl relative" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
+            <button onClick={() => setShareData(null)} className="absolute top-4 right-4 opacity-50 hover:opacity-100 transition-opacity">✕</button>
+            {shareData.status === 'loading' ? (
+              <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
+                <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin mb-4" style={{ borderColor: `${colors.button}40`, borderTopColor: colors.button }}></div>
+                <h3 className="text-lg font-bold" style={{ color: colors.headline }}>正在產生短網址...</h3>
+                <p className="text-sm mt-2 opacity-60" style={{ color: colors.paragraph }}>請稍候片刻</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center px-6 w-full animate-in fade-in zoom-in duration-300">
+                <h3 className="text-xl font-bold mb-4 flex items-center gap-2" style={{ color: colors.headline }}>🔗 分享連結已產生！</h3>
+                
+                <div className="w-full bg-black/40 border border-white/10 rounded-lg p-3 overflow-hidden">
+                  <div className="w-full font-mono text-sm break-all select-all text-center leading-relaxed" style={{ color: colors.paragraph }}>
+                    {shareData.url}
+                  </div>
+                </div>
+
+                <div className="flex w-full gap-3 mt-6">
+                  {navigator.share && (
+                    <button 
+                      onClick={() => {
+                        navigator.share({ title: 'A-B Loop 分享', url: shareData.url })
+                        .then(() => setShareData(null))
+                        .catch(() => {});
+                      }}
+                      className="flex-1 py-4 rounded-xl flex items-center justify-center gap-2 font-black transition-all hover:scale-105 active:scale-95"
+                      style={{ backgroundColor: colors.tertiary, color: colors.background }}
+                    >
+                      <span>💌</span> 傳送朋友
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => copyToClipboard(shareData.url)}
+                    className="flex-1 py-4 rounded-xl flex items-center justify-center gap-2 font-black transition-all hover:scale-105 active:scale-95"
+                    style={{ backgroundColor: colors.button, color: colors.buttonText }}
+                  >
+                    <span>📋</span> 點擊複製
+                  </button>
+                </div>
+                <p className="text-xs text-center opacity-40 mt-4" style={{ color: colors.paragraph }}>如遇到無法產生短網址的狀況，我們已為您準備好安全的長網址，請直接複製或分享即可。</p>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
