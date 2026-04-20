@@ -35,7 +35,6 @@ export default function App() {
   const [isRepeatEnabled, setIsRepeatEnabled] = useState(true);
   const [error, setError] = useState('');
   const lastLoadedUrl = useRef('');
-  const [showAutoplayOverlay, setShowAutoplayOverlay] = useState(false);
   const [draggingMarker, setDraggingMarker] = useState<string | null>(null);
   const [fileName, setFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -116,8 +115,6 @@ export default function App() {
     if (urlParam) {
       setAudioUrl(urlParam);
       setIsPlaying(true); // 分享連結進來後嘗試自動播放
-      // 標註為由分享進入，若被瀏覽器擋住自動播放則顯示提示
-      setShowAutoplayOverlay(true);
     }
     if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
     if (bParam !== null && !isNaN(parseFloat(bParam))) setPointB(parseFloat(bParam));
@@ -452,10 +449,10 @@ export default function App() {
     window.history.replaceState(null, '', `?${params.toString()}`);
     const longUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 
-    // 使用 TinyURL API 縮短網址
+    // 使用 is.gd API 縮短網址 (無過渡頁面)
     let finalUrl = longUrl;
     try {
-      const response = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`);
+      const response = await fetch(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(longUrl)}`);
       if (response.ok) {
         finalUrl = await response.text();
       }
@@ -602,12 +599,10 @@ export default function App() {
                  url={audioUrl}
                  playing={isPlaying}
                  volume={volume}
+                 onPlay={() => setIsPlaying(true)}
+                 onPause={() => setIsPlaying(false)}
                  onProgress={(state: any) => {
                    setCurrentTime(state.playedSeconds);
-                   // 如果正在播放且時間在動，隱藏自動播放提示
-                   if (state.playedSeconds > 0 && showAutoplayOverlay) {
-                     setShowAutoplayOverlay(false);
-                   }
                  }}
                  onDuration={(dur: number) => setDuration(dur)}
                  onReady={() => {
@@ -642,39 +637,6 @@ export default function App() {
                />
             </div>
           </div>
-
-          {/* 自動播放被擋住時的顯示 */}
-          {showAutoplayOverlay && audioUrl && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-6 text-center animate-in fade-in duration-500">
-              <div className="max-w-sm">
-                 <div className="w-20 h-20 bg-[#7f5af0] rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(127,90,240,0.5)] animate-pulse">
-                   <Play className="w-10 h-10 text-white translate-x-1" />
-                 </div>
-                 <h2 className="text-2xl font-bold mb-3" style={{ color: colors.headline }}>分享連結已載入</h2>
-                 <p className="opacity-60 mb-8" style={{ color: colors.paragraph }}>由於瀏覽器限制，請點擊下方按鈕開始體驗 A-B 重複播放內容</p>
-                 <button 
-                   onClick={() => {
-                     setIsPlaying(true);
-                     setShowAutoplayOverlay(false);
-                     // 確保使用正確的底層 API 觸發播放 (YouTube 為 playVideo，HTML5 為 play)
-                     const internal = playerRef.current?.getInternalPlayer();
-                     if (internal) {
-                       if (typeof internal.playVideo === 'function') {
-                         internal.playVideo();
-                       } else if (typeof internal.play === 'function') {
-                         internal.play().catch((e: any) => console.log('play blocked:', e));
-                       }
-                     }
-                     setTimeout(() => setVolume(v => v >= 1 ? 0.99 : v + 0.01), 50);
-                   }}
-                   className="w-full py-4 rounded-xl font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
-                   style={{ backgroundColor: colors.button, color: colors.buttonText }}
-                 >
-                   立即開始
-                 </button>
-              </div>
-            </div>
-          )}
 
           <div className="p-8 mb-10 border shadow-inner" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
             <div className="flex flex-wrap justify-between items-end gap-x-4 gap-y-4 mb-6">
