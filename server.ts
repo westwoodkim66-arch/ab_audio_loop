@@ -12,24 +12,41 @@ async function startServer() {
 
   app.use(express.json());
 
-  // API 路由：Proxy TinyURL 請求以避開前端 CORS 限制
+  // API 路由：Proxy 短網址請求以避開前端 CORS 限制並增加多重備援
   app.get("/api/shorten", async (req, res) => {
     const url = req.query.url as string;
     if (!url) {
       return res.status(400).json({ error: "Missing URL parameter" });
     }
 
-    try {
-      const response = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`);
-      if (response.ok) {
-        const shortUrl = await response.text();
-        return res.send(shortUrl);
+    // 將多個公開短網址服務作為備援陣列
+    const providers = [
+      `https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`,
+      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`
+    ];
+
+    for (const providerUrl of providers) {
+      try {
+        const response = await fetch(providerUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+          }
+        });
+        
+        if (response.ok) {
+          const shortUrl = (await response.text()).trim();
+          // 確保回傳的是真正的 http 網址
+          if (shortUrl.startsWith('http')) {
+            return res.send(shortUrl);
+          }
+        }
+      } catch (error) {
+        console.warn(`Shorten provider failed: ${providerUrl}`, error);
+        // 繼續嘗試下一個
       }
-      res.status(500).send("TinyURL service error");
-    } catch (error) {
-      console.error("Proxy error:", error);
-      res.status(500).send("Internal server error");
     }
+
+    res.status(500).send("All URL shortening services failed");
   });
 
   // Vite 中場軟體設定
