@@ -116,11 +116,17 @@ export default function App() {
     const searchParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
     
-    let urlParam = searchParams.get('url') || hashParams.get('url');
-    const vParam = searchParams.get('v') || hashParams.get('v');
+    // 支援原本的 url 參數，和更短的 u 參數
+    let urlParam = searchParams.get('url') || hashParams.get('url') || searchParams.get('u') || hashParams.get('u');
+    
+    // 獨立平台極致縮短支援
+    const vParam = searchParams.get('v') || hashParams.get('v');     // YouTube
+    const vmParam = searchParams.get('vm') || hashParams.get('vm');  // Vimeo
     
     if (vParam) {
       urlParam = `https://www.youtube.com/watch?v=${vParam}`;
+    } else if (vmParam) {
+      urlParam = `https://vimeo.com/${vmParam}`;
     }
 
     const aParam = searchParams.get('a') || hashParams.get('a');
@@ -460,25 +466,40 @@ export default function App() {
 
     const params = new URLSearchParams();
     
-    // 如果是 YouTube 網址，只保留影片 ID 來達成「假短網址」效果
-    let ytId = '';
+    // 極致壓縮網址策略
     const ytMatch = audioUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?]+)/);
+    const vmMatch = audioUrl.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+    
     if (ytMatch && ytMatch[1]) {
+      // YouTube 只留 v=ID
       params.set('v', ytMatch[1]);
+    } else if (vmMatch && vmMatch[1]) {
+      // Vimeo 只留 vm=ID
+      params.set('vm', vmMatch[1]);
     } else {
-      params.set('url', audioUrl);
+      // 一般網址改用 'u' 參數，並且剝除可能多餘的 query 字串以節省長度
+      try {
+        const cleanUrl = new URL(audioUrl);
+        // 保留乾淨的基礎網址
+        params.set('u', cleanUrl.origin + cleanUrl.pathname);
+      } catch (e) {
+        // 如果不是有效 URL 則原樣放入
+        params.set('u', audioUrl);
+      }
     }
 
     if (pointA !== null) params.set('a', Math.round(pointA).toString());
     if (pointB !== null) params.set('b', Math.round(pointB).toString());
 
     let finalOrigin = window.location.origin.replace('ais-dev-', 'ais-pre-');
-    let finalUrl = `${finalOrigin}${window.location.pathname}#${params.toString()}`;
+    // 解碼掉 params.toString() 中不必要的 %3A (:) 與 %2F (/) 讓網址看起來更直觀短小
+    const decodedHash = params.toString().replace(/%3A/g, ':').replace(/%2F/g, '/');
+    let finalUrl = `${finalOrigin}${window.location.pathname}#${decodedHash}`;
 
     try {
       const url = new URL(window.location.href);
       url.search = ""; 
-      url.hash = params.toString();
+      url.hash = decodedHash;
       window.history.replaceState(null, '', url.toString());
     } catch (e) {
       console.warn('History replace failed');
