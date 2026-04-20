@@ -472,7 +472,13 @@ export default function App() {
       });
       clearTimeout(timeoutId);
       if (response.ok) {
-        finalUrl = await response.text();
+        const text = await response.text();
+        // 如果後端尚未重啟或是回傳了 index.html (SPA Fallback)，則捨棄並換成長網址
+        if (!text.toLowerCase().includes('<!doctype') && text.includes('http')) {
+          finalUrl = text;
+        } else {
+          console.warn('Backend proxy returning HTML instead of URL. Need to re-deploy.');
+        }
       }
     } catch (e) {
       clearTimeout(timeoutId);
