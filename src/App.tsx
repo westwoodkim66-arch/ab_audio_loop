@@ -433,74 +433,90 @@ export default function App() {
 
   const handleShare = async () => {
     if (!audioUrl) {
-      setShareMessage('目前沒有可分享的音檔。');
+      setShareMessage('❌ 目前沒有可分享的音檔。');
       setTimeout(() => setShareMessage(''), 3000);
       return;
     }
     if (audioUrl.startsWith('blob:')) {
-      setShareMessage('本機上傳的音檔無法透過連結分享，請使用「網路來源網址」。');
+      setShareMessage('❌ 本機上傳的音檔無法直接分享，請使用網路連結。');
       setTimeout(() => setShareMessage(''), 4000);
       return;
     }
+
+    // 立即顯示反應狀態，避免手機版使用者跳轉等待感
+    setShareMessage('🔗 正在產生短網址...');
 
     const params = new URLSearchParams();
     params.set('url', audioUrl);
     if (pointA !== null) params.set('a', pointA.toFixed(2));
     if (pointB !== null) params.set('b', pointB.toFixed(2));
 
-    window.history.replaceState(null, '', `?${params.toString()}`);
-    
-    // 將 ais-dev- (私人開發機環境) 自動替換為 ais-pre- (公開分享伺服器)
-    // 避免使用者直接分享開發環境網址而導致 403 Forbidden 權限錯誤
+    try {
+      window.history.replaceState(null, '', `?${params.toString()}`);
+    } catch (e) {
+      console.warn('History replace failed');
+    }
+
     const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
     const longUrl = `${origin}${window.location.pathname}?${params.toString()}`;
 
-    // 使用 TinyURL API 縮短網址
-    setShareMessage('網址產生中...');
     let finalUrl = longUrl;
+    
+    // 設定超時機制，避免後端 proxy 若卡住導致前端完全沒反應
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
     try {
-      // 透過自有的後端 Proxy API 請求 TinyURL 以避開 CORS 限制
-      const response = await fetch(`/api/shorten?url=${encodeURIComponent(longUrl)}`);
+      const response = await fetch(`/api/shorten?url=${encodeURIComponent(longUrl)}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
       if (response.ok) {
         finalUrl = await response.text();
       }
     } catch (e) {
-      console.warn('Shorten URL failed, using long version');
+      clearTimeout(timeoutId);
+      console.warn('Shorten URL failed or timeout, using long version');
     }
 
     let copySuccess = false;
+    
+    // 優先使用新版 Clipboard API
     try {
-      if (navigator.clipboard) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(finalUrl);
         copySuccess = true;
       }
     } catch (e) {
-      console.warn('Clipboard failed');
+      console.warn('Clipboard API failed, trying legacy method');
     }
 
+    // 備案：舊版 execCommand 複製
     if (!copySuccess) {
       try {
         const textArea = document.createElement("textarea");
         textArea.value = finalUrl;
         textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        textArea.style.top = "0";
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-        document.execCommand('copy');
+        textArea.setSelectionRange(0, 99999); // 針對手機端強化選取
+        copySuccess = document.execCommand('copy');
         document.body.removeChild(textArea);
-        copySuccess = true;
       } catch (err) {
-        console.warn('ExecCommand failed');
+        console.warn('Legacy copy failed');
       }
     }
 
-    // 移除 window.alert() 避免在手機內嵌 iframe 造成無反應中斷
     if (copySuccess) {
-      setShareMessage('✅ 短網址已產生並複製！您的朋友可以直接透過此連結開啟。');
+      setShareMessage('✅ 短網址已複製到剪貼簿！');
     } else {
-      setShareMessage(`✅ 網址已產生，請手動複製: ${finalUrl}`);
+      // 若連複製都失敗，則顯示網址讓使用者可以長按選取
+      setShareMessage(`✅ 網址已產生，請長按複製: ${finalUrl}`);
     }
-    setTimeout(() => setShareMessage(''), 5000);
+    setTimeout(() => setShareMessage(''), 6000);
   };
 
   return (
