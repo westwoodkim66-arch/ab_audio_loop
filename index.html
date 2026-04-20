@@ -10,7 +10,7 @@
     <script>
       // 隱藏開發環境中無害的 WebSocket 連線錯誤提示
       window.addEventListener('error', (e) => {
-        if (e.message && (e.message.includes('WebSocket') || e.message.includes('vite'))) {
+        if (e.message && (e.message.includes('WebSocket') || e.message.includes('vite') || e.message.includes('ws'))) {
           e.stopImmediatePropagation();
         }
       });
@@ -20,6 +20,11 @@
           e.preventDefault();
         }
       });
+      
+      // 直接把 Vite Error Overlay 的自定義元素藏起來
+      const style = document.createElement('style');
+      style.innerHTML = 'vite-error-overlay { display: none !important; }';
+      document.head.appendChild(style);
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
