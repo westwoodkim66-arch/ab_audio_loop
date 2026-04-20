@@ -116,7 +116,13 @@ export default function App() {
     const searchParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
     
-    const urlParam = searchParams.get('url') || hashParams.get('url');
+    let urlParam = searchParams.get('url') || hashParams.get('url');
+    const vParam = searchParams.get('v') || hashParams.get('v');
+    
+    if (vParam) {
+      urlParam = `https://www.youtube.com/watch?v=${vParam}`;
+    }
+
     const aParam = searchParams.get('a') || hashParams.get('a');
     const bParam = searchParams.get('b') || hashParams.get('b');
 
@@ -452,13 +458,22 @@ export default function App() {
       return;
     }
 
-    // 立即顯示載入彈窗
-    setShareData({ isOpen: true, url: '', status: 'loading' });
-
     const params = new URLSearchParams();
-    params.set('url', audioUrl);
-    if (pointA !== null) params.set('a', pointA.toFixed(2));
-    if (pointB !== null) params.set('b', pointB.toFixed(2));
+    
+    // 如果是 YouTube 網址，只保留影片 ID 來達成「假短網址」效果
+    let ytId = '';
+    const ytMatch = audioUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?]+)/);
+    if (ytMatch && ytMatch[1]) {
+      params.set('v', ytMatch[1]);
+    } else {
+      params.set('url', audioUrl);
+    }
+
+    if (pointA !== null) params.set('a', Math.round(pointA).toString());
+    if (pointB !== null) params.set('b', Math.round(pointB).toString());
+
+    let finalOrigin = window.location.origin.replace('ais-dev-', 'ais-pre-');
+    let finalUrl = `${finalOrigin}${window.location.pathname}#${params.toString()}`;
 
     try {
       const url = new URL(window.location.href);
@@ -469,34 +484,7 @@ export default function App() {
       console.warn('History replace failed');
     }
 
-    const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
-    const longUrl = `${origin}${window.location.pathname}#${params.toString()}`;
-
-    let finalUrl = longUrl;
-    
-    // 設定超時機制，避免後端 proxy 若卡住導致前端完全沒反應
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-    try {
-      const response = await fetch(`/api/shorten?url=${encodeURIComponent(longUrl)}`, {
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      if (response.ok) {
-        const text = await response.text();
-        // 如果後端尚未重啟或是回傳了 index.html (SPA Fallback)，則捨棄並換成長網址
-        if (!text.toLowerCase().includes('<!doctype') && text.includes('http')) {
-          finalUrl = text;
-        } else {
-          console.warn('Backend proxy returning HTML instead of URL. Need to re-deploy.');
-        }
-      }
-    } catch (e) {
-      clearTimeout(timeoutId);
-      console.warn('Shorten URL failed or timeout, using long version');
-    }
-
+    // 直接顯示分享連結（不依賴後端 API 也就是實作純前端的「假短網址」）
     setShareData({ isOpen: true, url: finalUrl, status: 'success' });
   };
 
