@@ -56,10 +56,10 @@ export default function App() {
   }, [audioUrl]);
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
-  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying });
+  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume });
   useEffect(() => {
-    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying };
-  }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying]);
+    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume };
+  }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume]);
 
   // 鍵盤快捷鍵處理
   useEffect(() => {
@@ -69,7 +69,7 @@ export default function App() {
       const isInput = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || (activeElement as HTMLElement).isContentEditable);
       if (isInput) return;
 
-      const { audioUrl: currentUrl, currentTime: currentPos } = stateRef.current;
+      const { audioUrl: currentUrl, currentTime: currentPos, volume: currentVolume } = stateRef.current;
 
       if (e.code === 'Space') {
         // 空白鍵：暫停/播放
@@ -88,6 +88,14 @@ export default function App() {
         if (playerRef.current) {
           playerRef.current.seekTo(currentPos + 5, 'seconds');
         }
+      } else if (e.code === 'ArrowUp') {
+        // 上鍵：增加音量
+        e.preventDefault();
+        setVolume(Math.min(1, currentVolume + 0.05));
+      } else if (e.code === 'ArrowDown') {
+        // 下鍵：減少音量
+        e.preventDefault();
+        setVolume(Math.max(0, currentVolume - 0.05));
       }
     };
 
@@ -238,7 +246,7 @@ export default function App() {
     return { newTime, percent };
   };
 
-  const handleSeek = (e: React.MouseEvent) => {
+  const handleSeek = (e: React.MouseEvent | React.TouchEvent) => {
     const result = handleProgressBarInteraction(e);
     if (result && playerRef.current) {
       playerRef.current.seekTo(result.newTime, 'seconds');
@@ -246,21 +254,22 @@ export default function App() {
     }
   };
 
-  const onProgressMouseMove = (e: React.MouseEvent) => {
+  const onProgressMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
     const result = handleProgressBarInteraction(e);
     if (result) setPreviewTime(result.newTime);
   };
 
-  const onProgressMouseDown = (e: React.MouseEvent) => {
+  const onProgressMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
     setIsScrubbing(true);
     handleSeek(e);
   };
 
   useEffect(() => {
-    const handleGlobalMove = (e: MouseEvent) => {
+    const handleGlobalMove = (e: MouseEvent | TouchEvent) => {
       if (!isScrubbing || !progressBarRef.current) return;
       const rect = progressBarRef.current.getBoundingClientRect();
-      const percent = Math.min(Math.max(0, (e.clientX - rect.left) / rect.width), 1);
+      const clientX = 'touches' in e ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+      const percent = Math.min(Math.max(0, (clientX - rect.left) / rect.width), 1);
       const newTime = percent * duration;
       setPreviewTime(newTime);
       if (playerRef.current) {
@@ -275,10 +284,14 @@ export default function App() {
     if (isScrubbing) {
       window.addEventListener('mousemove', handleGlobalMove);
       window.addEventListener('mouseup', handleGlobalUp);
+      window.addEventListener('touchmove', handleGlobalMove, { passive: false });
+      window.addEventListener('touchend', handleGlobalUp);
     }
     return () => {
       window.removeEventListener('mousemove', handleGlobalMove);
       window.removeEventListener('mouseup', handleGlobalUp);
+      window.removeEventListener('touchmove', handleGlobalMove);
+      window.removeEventListener('touchend', handleGlobalUp);
     };
   }, [isScrubbing, duration]);
 
@@ -665,10 +678,12 @@ export default function App() {
               <div 
                 ref={progressBarRef} 
                 onMouseDown={onProgressMouseDown}
+                onTouchStart={onProgressMouseDown}
                 onMouseMove={onProgressMouseMove}
+                onTouchMove={onProgressMouseMove}
                 onMouseEnter={() => setIsHoveringBar(true)}
                 onMouseLeave={() => { if (!isScrubbing) { setIsHoveringBar(false); setPreviewTime(null); } }}
-                className="relative w-full h-4 cursor-pointer overflow-hidden shadow-inner group/bar" 
+                className="relative w-full h-8 cursor-pointer overflow-hidden shadow-inner group/bar rounded-full" 
                 style={{ backgroundColor: colors.stroke }}
               >
                 {/* 預覽條 (滑鼠移入或按住時顯示) */}
@@ -738,18 +753,18 @@ export default function App() {
                 <div className="flex flex-col gap-2">
                   <span className="text-[10px] font-black uppercase tracking-widest opacity-50 px-2">起點 A</span>
                   <div className="flex items-center w-full overflow-hidden touch-none border" style={{ backgroundColor: 'transparent', color: colors.headline, borderColor: colors.stroke }}>
-                    <button {...getHoldHandlers('A', -0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Minus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
-                    <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="w-full text-center font-mono text-lg font-bold py-3 border-none outline-none bg-transparent min-w-0 px-0" />
-                    <button {...getHoldHandlers('A', 0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Plus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <button {...getHoldHandlers('A', -0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Minus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="w-full text-center font-mono text-sm sm:text-lg font-bold py-3 border-none outline-none bg-transparent min-w-0 md:min-w-[50px] px-0 flex-shrink" />
+                    <button {...getHoldHandlers('A', 0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Plus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
                   </div>
                   <button onClick={setA} className="py-2 text-xs font-bold transition-all hover:opacity-80 border" style={{ borderColor: colors.stroke, color: colors.headline }}>📍 抓取當前</button>
                 </div>
                 <div className="flex flex-col gap-2">
                   <span className="text-[10px] font-black uppercase tracking-widest opacity-50 px-2">終點 B</span>
                   <div className="flex items-center w-full overflow-hidden touch-none border" style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.stroke }}>
-                    <button {...getHoldHandlers('B', -0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Minus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
-                    <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="w-full text-center font-mono text-lg font-bold py-3 border-none outline-none bg-transparent min-w-0 px-0" />
-                    <button {...getHoldHandlers('B', 0.1)} className="p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none"><Plus className="w-4 h-4 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <button {...getHoldHandlers('B', -0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Minus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                    <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="w-full text-center font-mono text-sm sm:text-lg font-bold py-3 border-none outline-none bg-transparent min-w-0 md:min-w-[50px] px-0 flex-shrink" />
+                    <button {...getHoldHandlers('B', 0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Plus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
                   </div>
                   <button onClick={setB} className="py-2 text-xs font-bold transition-all hover:opacity-80 border" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>📍 抓取當前</button>
                 </div>
