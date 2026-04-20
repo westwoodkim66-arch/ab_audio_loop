@@ -433,11 +433,13 @@ export default function App() {
 
   const handleShare = async () => {
     if (!audioUrl) {
-      window.alert('目前沒有可分享的音檔。');
+      setShareMessage('目前沒有可分享的音檔。');
+      setTimeout(() => setShareMessage(''), 3000);
       return;
     }
     if (audioUrl.startsWith('blob:')) {
-      window.alert('本機上傳的音檔無法透過連結分享，請使用「音檔來源網址」載入網路檔案。');
+      setShareMessage('本機上傳的音檔無法透過連結分享，請使用「網路來源網址」。');
+      setTimeout(() => setShareMessage(''), 4000);
       return;
     }
 
@@ -447,15 +449,39 @@ export default function App() {
     if (pointB !== null) params.set('b', pointB.toFixed(2));
 
     window.history.replaceState(null, '', `?${params.toString()}`);
-    const longUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    
+    // 將 ais-dev- (私人開發機環境) 自動替換為 ais-pre- (公開分享伺服器)
+    // 避免使用者直接分享開發環境網址而導致 403 Forbidden 權限錯誤
+    const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
+    const longUrl = `${origin}${window.location.pathname}?${params.toString()}`;
 
-    // 使用 is.gd API 縮短網址 (無過渡頁面)
+    // 使用 JSONP 請求 is.gd API 縮短網址來繞過 CORS 網域限制
+    setShareMessage('網址產生中...');
     let finalUrl = longUrl;
     try {
-      const response = await fetch(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(longUrl)}`);
-      if (response.ok) {
-        finalUrl = await response.text();
-      }
+      finalUrl = await new Promise<string>((resolve) => {
+        const script = document.createElement('script');
+        const callbackName = 'jsonp_callback_' + Math.floor(Math.random() * 1000000);
+        
+        (window as any)[callbackName] = function(data: any) {
+          delete (window as any)[callbackName];
+          document.body.removeChild(script);
+          if (data && data.shorturl) {
+            resolve(data.shorturl);
+          } else {
+            resolve(longUrl);
+          }
+        };
+
+        script.onerror = () => {
+          delete (window as any)[callbackName];
+          document.body.removeChild(script);
+          resolve(longUrl);
+        };
+
+        script.src = `https://is.gd/create.php?format=json&url=${encodeURIComponent(longUrl)}&callback=${callbackName}`;
+        document.body.appendChild(script);
+      });
     } catch (e) {
       console.warn('Shorten URL failed, using long version');
     }
@@ -486,18 +512,13 @@ export default function App() {
       }
     }
 
-    const isDev = window.location.hostname.includes('ais-dev-');
-
+    // 移除 window.alert() 避免在手機內嵌 iframe 造成無反應中斷
     if (copySuccess) {
-      if (isDev) {
-        window.alert(`✅ 短網址已產生並複製！\n\n⚠️ 注意：您分享的是「私人開發環境」網址，朋友可能無法打開這個連結。\n💡 建議做法：點擊頁面最右上角的「Share」按鈕發布為「公開 App」後，在公開頁面內產生的連結才能正常開啟！\n\n您的專屬連結為：\n${finalUrl}`);
-      } else {
-        setShareMessage('✅ 短網址已複製！您的朋友可以直接透過此連結開啟。');
-        setTimeout(() => setShareMessage(''), 4000);
-      }
+      setShareMessage('✅ 短網址已產生並複製！您的朋友可以直接透過此連結開啟。');
     } else {
-      window.prompt((isDev ? '⚠️ 由於您在私人開發環境，這個連結朋友可能打不開 (建議先點右上角 Share 發布)。\n\n' : '') + '您的瀏覽器環境無法自動複製，請手動複製以下短網址：', finalUrl);
+      setShareMessage(`✅ 網址已產生，請手動複製: ${finalUrl}`);
     }
+    setTimeout(() => setShareMessage(''), 5000);
   };
 
   return (
