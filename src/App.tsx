@@ -232,6 +232,12 @@ export default function App() {
     if (!isPlaying) {
       // 解決部分內嵌瀏覽器 (如 Line) 除非手動改變音量否則沒有聲音的問題
       setTimeout(() => setVolume(v => v >= 1 ? 0.99 : v + 0.01), 50);
+      // 同步觸發底層播放器，避免 React 狀態更新延遲導致 iOS/Line 判定非使用者主動操作
+      const internal = playerRef.current?.getInternalPlayer();
+      if (internal) {
+        if (typeof internal.playVideo === 'function') internal.playVideo();
+        else if (typeof internal.play === 'function') internal.play().catch(() => {});
+      }
     }
     setIsPlaying(!isPlaying);
   };
@@ -650,7 +656,15 @@ export default function App() {
                    onClick={() => {
                      setIsPlaying(true);
                      setShowAutoplayOverlay(false);
-                     if (playerRef.current) playerRef.current.getInternalPlayer()?.play?.();
+                     // 確保使用正確的底層 API 觸發播放 (YouTube 為 playVideo，HTML5 為 play)
+                     const internal = playerRef.current?.getInternalPlayer();
+                     if (internal) {
+                       if (typeof internal.playVideo === 'function') {
+                         internal.playVideo();
+                       } else if (typeof internal.play === 'function') {
+                         internal.play().catch((e: any) => console.log('play blocked:', e));
+                       }
+                     }
                      setTimeout(() => setVolume(v => v >= 1 ? 0.99 : v + 0.01), 50);
                    }}
                    className="w-full py-4 rounded-xl font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
@@ -668,7 +682,7 @@ export default function App() {
                 <span className="text-4xl sm:text-5xl font-mono font-bold tracking-tighter" style={{ color: colors.headline }}>{formatTime(currentTime)}</span>
                 <span className="font-mono ml-2 sm:ml-3 text-lg sm:text-xl opacity-40">/ {formatTime(duration)}</span>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="hidden sm:flex items-center gap-3">
                 <Volume2 className="w-5 h-5 opacity-50 flex-shrink-0" />
                 <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-24 sm:w-32 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
               </div>
