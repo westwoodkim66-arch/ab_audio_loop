@@ -455,33 +455,15 @@ export default function App() {
     const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
     const longUrl = `${origin}${window.location.pathname}?${params.toString()}`;
 
-    // 使用 JSONP 請求 is.gd API 縮短網址來繞過 CORS 網域限制
+    // 使用 TinyURL API 縮短網址
     setShareMessage('網址產生中...');
     let finalUrl = longUrl;
     try {
-      finalUrl = await new Promise<string>((resolve) => {
-        const script = document.createElement('script');
-        const callbackName = 'jsonp_callback_' + Math.floor(Math.random() * 1000000);
-        
-        (window as any)[callbackName] = function(data: any) {
-          delete (window as any)[callbackName];
-          document.body.removeChild(script);
-          if (data && data.shorturl) {
-            resolve(data.shorturl);
-          } else {
-            resolve(longUrl);
-          }
-        };
-
-        script.onerror = () => {
-          delete (window as any)[callbackName];
-          document.body.removeChild(script);
-          resolve(longUrl);
-        };
-
-        script.src = `https://is.gd/create.php?format=json&url=${encodeURIComponent(longUrl)}&callback=${callbackName}`;
-        document.body.appendChild(script);
-      });
+      // 透過自有的後端 Proxy API 請求 TinyURL 以避開 CORS 限制
+      const response = await fetch(`/api/shorten?url=${encodeURIComponent(longUrl)}`);
+      if (response.ok) {
+        finalUrl = await response.text();
+      }
     } catch (e) {
       console.warn('Shorten URL failed, using long version');
     }
