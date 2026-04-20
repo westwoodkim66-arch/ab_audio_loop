@@ -221,6 +221,10 @@ export default function App() {
 
   const togglePlay = () => {
     if (!audioUrl) return;
+    if (!isPlaying) {
+      // 解決部分內嵌瀏覽器 (如 Line) 除非手動改變音量否則沒有聲音的問題
+      setTimeout(() => setVolume(v => v >= 1 ? 0.99 : v + 0.01), 50);
+    }
     setIsPlaying(!isPlaying);
   };
 
@@ -609,10 +613,13 @@ export default function App() {
                  }}
                  width="100%"
                  height="100%"
+                 playsinline={true}
                  style={{ backgroundColor: '#000' }}
                  config={{
-                   youtube: { playerVars: { origin: window.location.origin, autoplay: 1 } } as any
-                 }}
+                   file: { attributes: { playsInline: true, webkitPlaysInline: true } },
+                   youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
+                   vimeo: { playerOptions: { playsinline: true, autoplay: true } }
+                 } as any}
                />
             </div>
           </div>
@@ -631,6 +638,7 @@ export default function App() {
                      setIsPlaying(true);
                      setShowAutoplayOverlay(false);
                      if (playerRef.current) playerRef.current.getInternalPlayer()?.play?.();
+                     setTimeout(() => setVolume(v => v >= 1 ? 0.99 : v + 0.01), 50);
                    }}
                    className="w-full py-4 rounded-xl font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
                    style={{ backgroundColor: colors.button, color: colors.buttonText }}
@@ -642,14 +650,14 @@ export default function App() {
           )}
 
           <div className="p-8 mb-10 border shadow-inner" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
-            <div className="flex justify-between items-end mb-6">
+            <div className="flex flex-wrap justify-between items-end gap-x-4 gap-y-4 mb-6">
               <div>
-                <span className="text-5xl font-mono font-bold tracking-tighter" style={{ color: colors.headline }}>{formatTime(currentTime)}</span>
-                <span className="font-mono ml-3 text-xl opacity-40">/ {formatTime(duration)}</span>
+                <span className="text-4xl sm:text-5xl font-mono font-bold tracking-tighter" style={{ color: colors.headline }}>{formatTime(currentTime)}</span>
+                <span className="font-mono ml-2 sm:ml-3 text-lg sm:text-xl opacity-40">/ {formatTime(duration)}</span>
               </div>
               <div className="flex items-center gap-3">
-                <Volume2 className="w-5 h-5 opacity-50" />
-                <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-24 h-1 appearance-none cursor-pointer accent-[#7f5af0]" style={{ backgroundColor: colors.stroke }} />
+                <Volume2 className="w-5 h-5 opacity-50 flex-shrink-0" />
+                <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-24 sm:w-32 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
               </div>
             </div>
 
@@ -719,10 +727,10 @@ export default function App() {
           </div>
 
           <div className="flex flex-col gap-8">
-            <div className="flex items-center justify-center gap-10">
-              <button onClick={() => skip(-5)} className="p-4 transition-all hover:scale-110 active:scale-95" style={{ color: colors.paragraph }}><SkipBack className="w-8 h-8" /></button>
-              <button onClick={togglePlay} className="w-24 h-24 border flex items-center justify-center hover:scale-105 active:scale-90 transition-all font-bold" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>{isPlaying ? <Pause className="w-10 h-10 fill-current" /> : <Play className="w-10 h-10 fill-current ml-1" />}</button>
-              <button onClick={() => skip(5)} className="p-4 transition-all hover:scale-110 active:scale-95" style={{ color: colors.paragraph }}><SkipForward className="w-8 h-8" /></button>
+            <div className="flex items-center justify-center gap-6 sm:gap-10">
+              <button onClick={() => skip(-5)} className="p-4 transition-all hover:scale-110 active:scale-95 flex-shrink-0" style={{ color: colors.paragraph }}><SkipBack className="w-8 h-8" /></button>
+              <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-24 h-24 sm:w-28 sm:h-28 border flex items-center justify-center hover:scale-105 active:scale-90 transition-all font-bold" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>{isPlaying ? <Pause className="w-10 h-10 fill-current" /> : <Play className="w-10 h-10 fill-current ml-1" />}</button>
+              <button onClick={() => skip(5)} className="p-4 transition-all hover:scale-110 active:scale-95 flex-shrink-0" style={{ color: colors.paragraph }}><SkipForward className="w-8 h-8" /></button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
