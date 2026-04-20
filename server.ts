@@ -12,14 +12,38 @@ async function startServer() {
 
   app.use(express.json());
 
-  // API 路由：Proxy 短網址請求以避開前端 CORS 限制並增加多重備援
+  // API 路由：Proxy 短網址請求 (使用 Reurl.cc 服務)
   app.get("/api/shorten", async (req, res) => {
     const url = req.query.url as string;
     if (!url) {
       return res.status(400).json({ error: "Missing URL parameter" });
     }
 
-    // 將多個公開短網址服務作為備援陣列
+    try {
+      // 優先使用使用者指定的 Reurl API
+      const reurlApiKey = "4070ff49d794e43715573b663c974755ecd7b132999204df8a38b58d65165567c4f5d6";
+      const response = await fetch("https://api.reurl.cc/shorten", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "reurl-api-key": reurlApiKey
+        },
+        body: JSON.stringify({ url })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.short_url) {
+          return res.send(data.short_url);
+        }
+      }
+      
+      console.warn("Reurl API returned non-ok status or missing short_url", await response.text());
+    } catch (error) {
+      console.error("Reurl API error:", error);
+    }
+
+    // 若 Reurl 失效，提供備援選項
     const providers = [
       `https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`,
       `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`
@@ -35,14 +59,12 @@ async function startServer() {
         
         if (response.ok) {
           const shortUrl = (await response.text()).trim();
-          // 確保回傳的是真正的 http 網址
           if (shortUrl.startsWith('http')) {
             return res.send(shortUrl);
           }
         }
       } catch (error) {
-        console.warn(`Shorten provider failed: ${providerUrl}`, error);
-        // 繼續嘗試下一個
+        console.warn(`Fallback shorten provider failed: ${providerUrl}`, error);
       }
     }
 
