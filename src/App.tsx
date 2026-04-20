@@ -49,9 +49,15 @@ export default function App() {
   const progressBarRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const isYouTube = useMemo(() => {
+  const isVideo = useMemo(() => {
     if (!audioUrl) return false;
-    return audioUrl.includes('youtube.com') || audioUrl.includes('youtu.be');
+    return audioUrl.includes('youtube.com') || 
+           audioUrl.includes('youtu.be') || 
+           audioUrl.includes('vimeo.com') ||
+           audioUrl.includes('dailymotion.com') ||
+           audioUrl.includes('twitch.tv') ||
+           audioUrl.includes('facebook.com') ||
+           audioUrl.includes('.mp4');
   }, [audioUrl]);
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
@@ -660,15 +666,27 @@ export default function App() {
             {error && <div className="mt-1 text-red-400 text-sm flex items-center gap-2 px-2"><Info className="w-4 h-4 flex-shrink-0" /> {error}</div>}
           </div>
 
-          <div className={`mb-10 overflow-hidden transition-all duration-500 border ${isYouTube ? 'shadow-2xl h-auto opacity-100' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
+          <div className={`mb-10 overflow-hidden transition-all duration-500 border ${isVideo ? 'shadow-2xl h-auto opacity-100' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
             <div className="aspect-video w-full">
                <Player
                  ref={playerRef}
                  url={audioUrl}
                  playing={isPlaying}
                  volume={volume}
+                 loop={isRepeatEnabled && pointA === null && pointB === null}
                  onPlay={() => setIsPlaying(true)}
                  onPause={() => setIsPlaying(false)}
+                 onEnded={() => {
+                   if (isRepeatEnabled) {
+                     if (pointA !== null) {
+                       startPlaybackAtA(pointA);
+                     } else {
+                       startPlaybackAtA(0);
+                     }
+                   } else {
+                     setIsPlaying(false);
+                   }
+                 }}
                  onProgress={(state: any) => {
                    setCurrentTime(state.playedSeconds);
                  }}
@@ -684,11 +702,11 @@ export default function App() {
                      playerRef.current.seekTo(parseFloat(aParam), 'seconds');
                    }
                    setError(''); // 載入成功則清除錯誤
-                   setSuccessMessage(isYouTube ? 'YouTube 影片載入成功！' : '音檔載入成功！');
+                   setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
                    setTimeout(() => setSuccessMessage(''), 3000);
                  }}
                  onError={() => {
-                   // 如果是 YouTube 且網址為空，不報錯
+                   // 如果是 YouTube 等影片來源且網址為空，不報錯
                    if (!audioUrl) return;
                    setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
                    setSuccessMessage('');
