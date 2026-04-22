@@ -76,17 +76,22 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime }: Tr
     if (activeIndex !== -1 && scrollContainerRef.current) {
         const activeElement = scrollContainerRef.current.querySelector(`[data-index="${activeIndex}"]`) as HTMLElement;
         if (activeElement) {
-            const container = scrollContainerRef.current;
+            const stickyHeader = document.getElementById('sticky-header');
+            const stickyHeight = stickyHeader ? stickyHeader.offsetHeight : 0;
             
-            // Calculate position to snap the element into the exact center of the container
-            const elementTop = activeElement.offsetTop;
+            // Calculate available viewport height below the sticky header
+            const availableHeight = window.innerHeight - stickyHeight;
             const elementHeight = activeElement.offsetHeight;
-            const containerHeight = container.clientHeight;
             
-            const targetScrollTop = elementTop - (containerHeight / 2) + (elementHeight / 2);
+            // We want the element to be in the vertical center of the available space
+            const targetY = stickyHeight + (availableHeight / 2) - (elementHeight / 2);
             
-            container.scrollTo({
-                top: targetScrollTop,
+            // getBoundingClientRect().top gives position relative to current viewport.
+            // distance to scroll is current top minus target Y
+            const distanceY = activeElement.getBoundingClientRect().top - targetY;
+            
+            window.scrollBy({
+                top: distanceY,
                 behavior: 'smooth'
             });
         }
@@ -384,7 +389,7 @@ Each object MUST have:
       )}
 
       {lines.length > 0 && (
-        <div ref={scrollContainerRef} className="p-4 bg-[#16161a] rounded-b-2xl max-h-[420px] overflow-y-auto w-full border-t border-white/5 custom-scrollbar">
+        <div ref={scrollContainerRef} className="p-4 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all min-h-[400px]">
             <div className="flex border-b border-white/5 pb-4 mb-4 gap-4 items-center">
               <span className="text-sm font-bold text-[#94a1b2]">詞性標記：</span>
               <div className="flex flex-wrap gap-2 text-[10px] items-center">

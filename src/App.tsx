@@ -608,9 +608,9 @@ export default function App() {
         </div>
       )}
 
-      <div className="max-w-3xl w-full overflow-hidden shadow-2xl border" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
+      <div className="max-w-3xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
         
-        <div className="p-10 text-center border-b border-opacity-5" style={{ borderColor: colors.paragraph }}>
+        <div className="p-10 text-center border-b border-opacity-5 rounded-t-2xl md:rounded-t-3xl" style={{ borderColor: colors.paragraph }}>
           <h1 className="text-4xl font-bold mb-3 flex items-center justify-center gap-3" style={{ color: colors.headline }}>
             <RotateCcw className="w-10 h-10" />
             AB Repeat 點讀助手
@@ -618,8 +618,8 @@ export default function App() {
           <p className="text-lg opacity-90" style={{ color: colors.paragraph }}>精準控制 • 反覆練習 • 輕鬆分享</p>
         </div>
 
-        <div className="p-8 md:p-12">
-          <div className="mb-10 flex flex-col gap-4">
+        <div className="px-8 md:px-12 pt-8 md:pt-12">
+          <div className="mb-8 flex flex-col gap-4">
             <label className="block text-xs font-bold uppercase tracking-widest opacity-70">載入音檔</label>
             <div 
               className={`group border border-dashed p-8 flex flex-col items-center justify-center transition-all cursor-pointer ${isDragging ? 'bg-opacity-10 scale-[1.02]' : 'hover:bg-opacity-5'}`}
@@ -682,193 +682,182 @@ export default function App() {
             </div>
             {error && <div className="mt-1 text-red-400 text-sm flex items-center gap-2 px-2"><Info className="w-4 h-4 flex-shrink-0" /> {error}</div>}
           </div>
+        </div>
 
-          <div className={`mb-10 overflow-hidden transition-all duration-500 border ${isVideo ? 'shadow-2xl h-auto opacity-100' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
-            <div className="aspect-video w-full">
-               <Player
-                 ref={playerRef}
-                 url={audioUrl}
-                 playing={isPlaying}
-                 volume={volume}
-                 playbackRate={playbackRate}
-                 loop={isRepeatEnabled && pointA === null && pointB === null}
-                 onPlay={() => setIsPlaying(true)}
-                 onPause={() => setIsPlaying(false)}
-                 onEnded={() => {
-                   if (isRepeatEnabled) {
-                     if (pointA !== null) {
-                       startPlaybackAtA(pointA);
+        <div id="sticky-header" className="sticky top-0 z-40 border-b-2 shadow-2xl transition-all" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
+          <div className="px-4 md:px-8 py-3">
+            {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
+            <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
+              <div className="aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
+                 <Player
+                   ref={playerRef}
+                   url={audioUrl}
+                   playing={isPlaying}
+                   volume={volume}
+                   playbackRate={playbackRate}
+                   loop={isRepeatEnabled && pointA === null && pointB === null}
+                   onPlay={() => setIsPlaying(true)}
+                   onPause={() => setIsPlaying(false)}
+                   onEnded={() => {
+                     if (isRepeatEnabled) {
+                       if (pointA !== null) {
+                         startPlaybackAtA(pointA);
+                       } else {
+                         startPlaybackAtA(0);
+                       }
                      } else {
-                       startPlaybackAtA(0);
+                       setIsPlaying(false);
                      }
-                   } else {
-                     setIsPlaying(false);
-                   }
-                 }}
-                 onProgress={(state: any) => {
-                   setCurrentTime(state.playedSeconds);
-                 }}
-                 onDuration={(dur: number) => setDuration(dur)}
-                 onReady={() => {
-                   // 防止重複觸發成功的提示
-                   if (lastLoadedUrl.current === audioUrl) return;
-                   lastLoadedUrl.current = audioUrl;
-
-                   const searchParams = new URLSearchParams(window.location.search);
-                   const hashParams = new URLSearchParams(window.location.hash.slice(1));
-                   const aParam = searchParams.get('a') || hashParams.get('a');
-                   if (aParam && playerRef.current) {
-                     playerRef.current.seekTo(parseFloat(aParam), 'seconds');
-                   }
-                   setError(''); // 載入成功則清除錯誤
-                   setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
-                   setTimeout(() => setSuccessMessage(''), 3000);
-                 }}
-                 onError={() => {
-                   // 如果是 YouTube 等影片來源且網址為空，不報錯
-                   if (!audioUrl) return;
-                   setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
-                   setSuccessMessage('');
-                 }}
-                 width="100%"
-                 height="100%"
-                 playsinline={true}
-                 style={{ backgroundColor: '#000' }}
-                 config={{
-                   file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
-                   youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
-                   vimeo: { playerOptions: { playsinline: true, autoplay: true } }
-                 } as any}
-               />
-            </div>
-          </div>
-
-          <div className="p-8 mb-10 border shadow-inner" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
-            <div className="flex flex-wrap justify-between items-end gap-x-4 gap-y-4 mb-6">
-              <div>
-                <span className="text-4xl sm:text-5xl font-mono font-bold tracking-tighter" style={{ color: colors.headline }}>{formatTime(currentTime)}</span>
-                <span className="font-mono ml-2 sm:ml-3 text-lg sm:text-xl opacity-40">/ {formatTime(duration)}</span>
-              </div>
-              <div className="hidden sm:flex items-center gap-6">
-                <div className="flex items-center gap-3">
-                    <span className="text-xs font-bold uppercase tracking-widest opacity-60">速度</span>
-                    <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="p-1 hover:bg-white/10 rounded">-</button>
-                    <span className="text-sm font-mono font-bold">{playbackRate.toFixed(1)}x</span>
-                    <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="p-1 hover:bg-white/10 rounded">+</button>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Volume2 className="w-5 h-5 opacity-50 flex-shrink-0" />
-                  <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-24 sm:w-28 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
-                </div>
+                   }}
+                   onProgress={(state: any) => {
+                     setCurrentTime(state.playedSeconds);
+                   }}
+                   onDuration={(dur: number) => setDuration(dur)}
+                   onReady={() => {
+                     if (lastLoadedUrl.current === audioUrl) return;
+                     lastLoadedUrl.current = audioUrl;
+                     const searchParams = new URLSearchParams(window.location.search);
+                     const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                     const aParam = searchParams.get('a') || hashParams.get('a');
+                     if (aParam && playerRef.current) {
+                       playerRef.current.seekTo(parseFloat(aParam), 'seconds');
+                     }
+                     setError('');
+                     setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
+                     setTimeout(() => setSuccessMessage(''), 3000);
+                   }}
+                   onError={() => {
+                     if (!audioUrl) return;
+                     setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
+                     setSuccessMessage('');
+                   }}
+                   width="100%"
+                   height="100%"
+                   playsinline={true}
+                   config={{
+                     file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
+                     youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
+                     vimeo: { playerOptions: { playsinline: true, autoplay: true } }
+                   } as any}
+                 />
               </div>
             </div>
 
-            <div className="relative h-20 flex items-center">
-              <div 
-                ref={progressBarRef} 
-                onMouseDown={onProgressMouseDown}
-                onTouchStart={onProgressMouseDown}
-                onMouseMove={onProgressMouseMove}
-                onTouchMove={onProgressMouseMove}
-                onMouseEnter={() => setIsHoveringBar(true)}
-                onMouseLeave={() => { if (!isScrubbing) { setIsHoveringBar(false); setPreviewTime(null); } }}
-                className="relative w-full h-8 cursor-pointer overflow-hidden shadow-inner group/bar rounded-full" 
-                style={{ backgroundColor: colors.stroke }}
-              >
-                {/* 預覽條 (滑鼠移入或按住時顯示) */}
-                {previewTime !== null && (
-                  <div 
-                    className="absolute top-0 left-0 h-full opacity-20 pointer-events-none transition-all duration-75" 
-                    style={{ width: `${(previewTime / duration) * 100}%`, backgroundColor: colors.button }} 
-                  />
-                )}
+            <div className="flex flex-col gap-3">
+              {/* Top Row: Time, Progress Bar, Play Controls */}
+              <div className="flex items-center gap-4">
+                <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-12 h-12 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
+                   {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-1" />}
+                </button>
                 
-                {/* 當前進度 */}
-                <div className="absolute top-0 left-0 h-full opacity-40 transition-all pointer-events-none" style={{ width: `${(currentTime / duration) * 100}%`, backgroundColor: colors.button }} />
-                
-                {/* AB 區間填充 */}
-                {pointA !== null && pointB !== null && (
-                  <div className="absolute top-0 h-full opacity-30" style={{ left: `${(pointA / duration) * 100}%`, width: `${((pointB - pointA) / duration) * 100}%`, backgroundColor: colors.tertiary }} />
-                )}
+                <div className="flex-grow flex flex-col gap-1.5">
+                  <div className="flex justify-between items-baseline px-1">
+                    <span className="font-mono text-sm font-bold tracking-tight" style={{ color: colors.headline }}>{formatTime(currentTime)} <span className="opacity-40 font-normal">/ {formatTime(duration)}</span></span>
+                    
+                    {/* Compact Speed & Volume */}
+                    <div className="hidden md:flex items-center gap-4">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
+                        <div className="flex bg-white/5 rounded px-1 py-0.5">
+                          <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">-</button>
+                          <span className="text-xs font-mono font-bold w-6 text-center">{playbackRate.toFixed(1)}</span>
+                          <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">+</button>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
+                        <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="relative h-6 flex items-center group/bar">
+                    <div 
+                      ref={progressBarRef} 
+                      onMouseDown={onProgressMouseDown}
+                      onTouchStart={onProgressMouseDown}
+                      onMouseMove={onProgressMouseMove}
+                      onTouchMove={onProgressMouseMove}
+                      onMouseEnter={() => setIsHoveringBar(true)}
+                      onMouseLeave={() => { if (!isScrubbing) { setIsHoveringBar(false); setPreviewTime(null); } }}
+                      className="relative w-full h-3 cursor-pointer overflow-hidden shadow-inner group-hover/bar:h-4 transition-all rounded-full" 
+                      style={{ backgroundColor: colors.stroke }}
+                    >
+                      {/* 預覽條 */}
+                      {previewTime !== null && (
+                        <div 
+                          className="absolute top-0 left-0 h-full opacity-20 pointer-events-none transition-all duration-75" 
+                          style={{ width: `${(previewTime / duration) * 100}%`, backgroundColor: colors.button }} 
+                        />
+                      )}
+                      {/* 當前進度 */}
+                      <div className="absolute top-0 left-0 h-full opacity-40 transition-all pointer-events-none" style={{ width: `${(currentTime / duration) * 100}%`, backgroundColor: colors.button }} />
+                      {/* AB 區間填充 */}
+                      {pointA !== null && pointB !== null && (
+                        <div className="absolute top-0 h-full opacity-40" style={{ left: `${(pointA / duration) * 100}%`, width: `${((pointB - pointA) / duration) * 100}%`, backgroundColor: colors.tertiary }} />
+                      )}
+                    </div>
+                    {/* A/B Markers */}
+                    {pointA !== null && (
+                      <div 
+                        className="absolute top-1/2 -translate-y-1/2 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
+                        style={{ left: `${(pointA / duration) * 100}%` }}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
+                        onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
+                      >
+                        <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all border rounded-sm ${draggingMarker === 'A' ? 'scale-125' : 'group-hover:scale-110'}`} style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>
+                          {draggingMarker === 'A' ? formatTime(pointA) : 'A'}
+                        </div>
+                      </div>
+                    )}
+                    {pointB !== null && (
+                      <div 
+                        className="absolute top-1/2 -translate-y-1/2 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
+                        style={{ left: `${(pointB / duration) * 100}%` }}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
+                        onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
+                      >
+                         <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all border rounded-sm ${draggingMarker === 'B' ? 'scale-125' : 'group-hover:scale-110'}`} style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>
+                          {draggingMarker === 'B' ? formatTime(pointB) : 'B'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              {/* 預覽時間標籤 (懸浮) */}
-              {(isHoveringBar || isScrubbing) && previewTime !== null && (
-                <div 
-                  className={`absolute bottom-full mb-2 -translate-x-1/2 pointer-events-none px-2 py-1 text-[10px] font-mono font-bold shadow-xl border z-50 animate-in fade-in zoom-in-95 duration-200 ${isScrubbing ? 'scale-110' : ''}`}
-                  style={{ left: `${(previewTime / duration) * 100}%`, backgroundColor: isScrubbing ? colors.button : colors.background, color: colors.headline, borderColor: isScrubbing ? colors.headline : colors.stroke }}
-                >
-                  {formatTime(previewTime)}
-                </div>
-              )}
-              {pointA !== null && (
-                <div 
-                  className="absolute top-0 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
-                  style={{ left: `${(pointA / duration) * 100}%` }}
-                  onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
-                  onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
-                >
-                  <div className={`text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-all border ${draggingMarker === 'A' ? 'scale-125 -translate-y-2' : 'group-hover:scale-125'}`} style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>
-                    {draggingMarker === 'A' ? formatTime(pointA) : 'A'}
+              {/* Bottom Row: A/B Controls (Compact) */}
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-white/5 rounded-lg px-3 py-2 border border-white/5">
+                <div className="flex flex-wrap items-center gap-2 md:gap-4 flex-grow">
+                  
+                  {/* Point A Input */}
+                  <div className="flex items-center gap-1.5 bg-black/40 rounded px-1.5 py-1 border border-white/10">
+                    <span className="text-[10px] font-black opacity-50">A</span>
+                    <button {...getHoldHandlers('A', -0.1)} className="hover:bg-white/20 rounded p-0.5"><Minus className="w-3 h-3 opacity-70" /></button>
+                    <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="w-10 text-center font-mono text-[11px] bg-transparent outline-none" />
+                    <button {...getHoldHandlers('A', 0.1)} className="hover:bg-white/20 rounded p-0.5"><Plus className="w-3 h-3 opacity-70" /></button>
+                    <button onClick={setA} className="ml-1 text-[10px] bg-white/10 hover:bg-white/20 rounded px-1.5 py-0.5 transition-colors">設為當前</button>
                   </div>
-                  <div className="w-0.5 h-16" style={{ backgroundColor: colors.headline }}></div>
-                </div>
-              )}
-              {pointB !== null && (
-                <div 
-                  className="absolute top-0 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
-                  style={{ left: `${(pointB / duration) * 100}%` }}
-                  onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
-                  onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
-                >
-                  <div className={`text-[10px] px-2 py-0.5 font-bold shadow-lg mb-1 transition-all border ${draggingMarker === 'B' ? 'scale-125 -translate-y-2' : 'group-hover:scale-125'}`} style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>
-                    {draggingMarker === 'B' ? formatTime(pointB) : 'B'}
-                  </div>
-                  <div className="w-0.5 h-16" style={{ backgroundColor: colors.button }}></div>
-                </div>
-              )}
-            </div>
-          </div>
 
-          <div className="flex flex-col gap-8">
-            <div className="flex items-center justify-center gap-6 sm:gap-10">
-              <button onClick={() => skip(-5)} className="p-4 transition-all hover:scale-110 active:scale-95 flex-shrink-0" style={{ color: colors.paragraph }}><SkipBack className="w-8 h-8" /></button>
-              <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-24 h-24 sm:w-28 sm:h-28 border flex items-center justify-center hover:scale-105 active:scale-90 transition-all font-bold" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>{isPlaying ? <Pause className="w-10 h-10 fill-current" /> : <Play className="w-10 h-10 fill-current ml-1" />}</button>
-              <button onClick={() => skip(5)} className="p-4 transition-all hover:scale-110 active:scale-95 flex-shrink-0" style={{ color: colors.paragraph }}><SkipForward className="w-8 h-8" /></button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2">
-                  <span className="text-[10px] font-black uppercase tracking-widest opacity-50 px-2">起點 A</span>
-                  <div className="flex items-center w-full overflow-hidden touch-none border" style={{ backgroundColor: 'transparent', color: colors.headline, borderColor: colors.stroke }}>
-                    <button {...getHoldHandlers('A', -0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Minus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
-                    <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="flex-1 w-0 text-center font-mono text-sm sm:text-base md:text-lg font-bold py-3 border-none outline-none bg-transparent px-0" />
-                    <button {...getHoldHandlers('A', 0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Plus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
+                  {/* Point B Input */}
+                  <div className="flex items-center gap-1.5 bg-black/40 rounded px-1.5 py-1 border border-white/10" style={{ borderColor: 'rgba(127, 90, 240, 0.3)' }}>
+                    <span className="text-[10px] font-black" style={{ color: colors.button }}>B</span>
+                    <button {...getHoldHandlers('B', -0.1)} className="hover:bg-white/20 rounded p-0.5"><Minus className="w-3 h-3 opacity-70" /></button>
+                    <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="w-10 text-center font-mono text-[11px] bg-transparent outline-none" style={{ color: colors.button }} />
+                    <button {...getHoldHandlers('B', 0.1)} className="hover:bg-white/20 rounded p-0.5"><Plus className="w-3 h-3 opacity-70" /></button>
+                    <button onClick={setB} className="ml-1 text-[10px] rounded px-1.5 py-0.5 transition-colors" style={{ backgroundColor: colors.button, color: colors.buttonText }}>設為當前</button>
                   </div>
-                  <button onClick={setA} className="py-2 text-xs font-bold transition-all hover:opacity-80 border" style={{ borderColor: colors.stroke, color: colors.headline }}>📍 抓取當前</button>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <span className="text-[10px] font-black uppercase tracking-widest opacity-50 px-2">終點 B</span>
-                  <div className="flex items-center w-full overflow-hidden touch-none border" style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.stroke }}>
-                    <button {...getHoldHandlers('B', -0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Minus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
-                    <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="flex-1 w-0 text-center font-mono text-sm sm:text-base md:text-lg font-bold py-3 border-none outline-none bg-transparent px-0" />
-                    <button {...getHoldHandlers('B', 0.1)} className="p-2 sm:p-3 hover:bg-white/10 active:bg-white/20 transition-all focus:outline-none select-none flex-shrink-0"><Plus className="w-4 h-4 sm:w-5 sm:h-5 opacity-70 hover:opacity-100 pointer-events-none" /></button>
-                  </div>
-                  <button onClick={setB} className="py-2 text-xs font-bold transition-all hover:opacity-80 border" style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.stroke }}>📍 抓取當前</button>
-                </div>
-              </div>
 
-              <div className="flex flex-col gap-4">
-                <div className="flex gap-3 h-full items-end">
-                  <button onClick={() => setIsRepeatEnabled(!isRepeatEnabled)} className={`flex-grow py-3 font-bold transition-all border ${isRepeatEnabled ? '' : 'opacity-40'}`} style={{ backgroundColor: isRepeatEnabled ? colors.button : 'transparent', color: isRepeatEnabled ? colors.buttonText : colors.paragraph, borderColor: colors.button }}>重複播放: {isRepeatEnabled ? 'ON' : 'OFF'}</button>
-                  <button onClick={clearAB} title="清除標記" className="p-3 transition-all border hover:bg-red-900/40 hover:text-red-400" style={{ borderColor: colors.stroke, color: colors.headline }}><Trash2 className="w-6 h-6" /></button>
-                  <button onClick={handleShare} title="產生分享連結" className="p-3 transition-all border hover:bg-white/20" style={{ borderColor: colors.stroke, color: colors.headline }}><Share2 className="w-6 h-6" /></button>
+                  {/* Repeat Toggle */}
+                  <label className="flex items-center gap-1.5 cursor-pointer ml-auto md:ml-2">
+                    <input type="checkbox" checked={isRepeatEnabled} onChange={(e) => setIsRepeatEnabled(e.target.checked)} className="w-3 h-3 accent-[#7f5af0]" />
+                    <span className={`text-xs font-bold ${isRepeatEnabled ? 'text-white' : 'opacity-50'}`}>循環</span>
+                  </label>
                 </div>
-                <div className="flex gap-2 items-center p-2 border" style={{ backgroundColor: 'transparent', borderColor: colors.stroke }}>
-                   <span className="text-[10px] font-black uppercase tracking-widest opacity-60 px-2 whitespace-nowrap" style={{ color: colors.headline }}>快速區間:</span>
-                   <input type="text" value={rangeInput} onChange={(e) => setRangeInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && applyRange()} placeholder="1:19~2:16" className="w-full bg-transparent border-none outline-none font-mono text-sm" style={{ color: colors.headline }} />
-                   <button onClick={applyRange} className="px-4 py-1.5 text-xs font-black whitespace-nowrap border" style={{ backgroundColor: colors.tertiary, color: colors.background, borderColor: colors.stroke }}>套用</button>
+
+                <div className="flex items-center gap-2 border-l border-white/10 pl-3">
+                  <button onClick={clearAB} title="清除標記" className="p-1.5 hover:bg-white/10 rounded transition-colors text-red-400 group"><Trash2 className="w-4 h-4 opacity-70 group-hover:opacity-100" /></button>
+                  <button onClick={handleShare} title="產生分享連結" className="p-1.5 hover:bg-white/10 rounded transition-colors group"><Share2 className="w-4 h-4 opacity-70 group-hover:opacity-100" /></button>
                 </div>
               </div>
             </div>
