@@ -71,6 +71,27 @@ async function startServer() {
     res.status(500).send("All URL shortening services failed");
   });
 
+  // API 路由：獲取 YouTube 字幕
+  app.get("/api/yt-transcript", async (req, res) => {
+    try {
+      const url = req.query.url as string;
+      if (!url) {
+        return res.status(400).json({ error: "Missing URL parameter" });
+      }
+
+      // @ts-ignore
+      const YoutubeTranscript = (await import('youtube-transcript')).YoutubeTranscript;
+      
+      const transcript = await YoutubeTranscript.fetchTranscript(url);
+      
+      // format: [{text: "hi", duration: 1000, offset: 0}, ...]
+      res.json(transcript);
+    } catch (error: any) {
+      console.error("Youtube Transcript error:", error);
+      res.status(500).json({ error: "Failed to fetch transcript: " + error.message });
+    }
+  });
+
   // Vite 中場軟體設定
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

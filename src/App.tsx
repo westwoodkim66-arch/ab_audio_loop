@@ -7,6 +7,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, Share2, Minus, Plus } from 'lucide-react';
 import ReactPlayer from 'react-player';
 
+import TranscriptPanel from './components/TranscriptPanel';
+
 export default function App() {
   // 配色方案常量 (根據附圖)
   const colors = {
@@ -27,6 +29,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
+  const [playbackRate, setPlaybackRate] = useState(1.0);
   const [pointA, setPointA] = useState<number | null>(null);
   const [pointB, setPointB] = useState<number | null>(null);
   const [inputA, setInputA] = useState('');
@@ -687,6 +690,7 @@ export default function App() {
                  url={audioUrl}
                  playing={isPlaying}
                  volume={volume}
+                 playbackRate={playbackRate}
                  loop={isRepeatEnabled && pointA === null && pointB === null}
                  onPlay={() => setIsPlaying(true)}
                  onPause={() => setIsPlaying(false)}
@@ -731,7 +735,7 @@ export default function App() {
                  playsinline={true}
                  style={{ backgroundColor: '#000' }}
                  config={{
-                   file: { attributes: { playsInline: true, webkitPlaysInline: true } },
+                   file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
                    youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
                    vimeo: { playerOptions: { playsinline: true, autoplay: true } }
                  } as any}
@@ -745,9 +749,17 @@ export default function App() {
                 <span className="text-4xl sm:text-5xl font-mono font-bold tracking-tighter" style={{ color: colors.headline }}>{formatTime(currentTime)}</span>
                 <span className="font-mono ml-2 sm:ml-3 text-lg sm:text-xl opacity-40">/ {formatTime(duration)}</span>
               </div>
-              <div className="hidden sm:flex items-center gap-3">
-                <Volume2 className="w-5 h-5 opacity-50 flex-shrink-0" />
-                <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-24 sm:w-32 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
+              <div className="hidden sm:flex items-center gap-6">
+                <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold uppercase tracking-widest opacity-60">速度</span>
+                    <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="p-1 hover:bg-white/10 rounded">-</button>
+                    <span className="text-sm font-mono font-bold">{playbackRate.toFixed(1)}x</span>
+                    <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="p-1 hover:bg-white/10 rounded">+</button>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Volume2 className="w-5 h-5 opacity-50 flex-shrink-0" />
+                  <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-24 sm:w-28 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
+                </div>
               </div>
             </div>
 
@@ -874,6 +886,8 @@ export default function App() {
             </ul>
           </div>
         </div>
+        
+        <TranscriptPanel playerRef={playerRef} audioUrl={audioUrl} currentTime={currentTime} />
       </div>
     </div>
   );
