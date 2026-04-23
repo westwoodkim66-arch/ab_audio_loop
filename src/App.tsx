@@ -6,8 +6,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, Share2, Minus, Plus } from 'lucide-react';
 import ReactPlayer from 'react-player';
+import LZString from 'lz-string';
 
-import TranscriptPanel from './components/TranscriptPanel';
+import TranscriptPanel, { SubtitleLine } from './components/TranscriptPanel';
 
 export default function App() {
   // 配色方案常量 (根據附圖)
@@ -43,6 +44,9 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [shareData, setShareData] = useState<{isOpen: boolean, url: string, status: 'idle' | 'loading' | 'success'} | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
+  
+  // 新增 transcript state 讓 App 可存儲字串資料以便分享
+  const [transcriptLines, setTranscriptLines] = useState<SubtitleLine[]>([]);
 
   const [previewTime, setPreviewTime] = useState<number | null>(null);
   const [isHoveringBar, setIsHoveringBar] = useState(false);
@@ -134,6 +138,7 @@ export default function App() {
 
     const aParam = searchParams.get('a') || hashParams.get('a');
     const bParam = searchParams.get('b') || hashParams.get('b');
+    const tParam = searchParams.get('t') || hashParams.get('t');
 
     if (urlParam) {
       setAudioUrl(urlParam);
@@ -141,6 +146,17 @@ export default function App() {
     }
     if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
     if (bParam !== null && !isNaN(parseFloat(bParam))) setPointB(parseFloat(bParam));
+    if (tParam) {
+      try {
+        const decompressed = LZString.decompressFromEncodedURIComponent(tParam);
+        if (decompressed) {
+          const lines = JSON.parse(decompressed);
+          setTranscriptLines(lines);
+        }
+      } catch (err) {
+        console.error("Failed to parse transcript lines from URL", err);
+      }
+    }
   }, []);
 
   const formatTime = (time: number) => {
@@ -494,6 +510,16 @@ export default function App() {
     if (pointA !== null) params.set('a', Math.round(pointA).toString());
     if (pointB !== null) params.set('b', Math.round(pointB).toString());
 
+    if (transcriptLines && transcriptLines.length > 0) {
+      try {
+        const linesStr = JSON.stringify(transcriptLines);
+        const compressed = LZString.compressToEncodedURIComponent(linesStr);
+        params.set('t', compressed);
+      } catch (err) {
+        console.error("Failed to compress transcript for sharing", err);
+      }
+    }
+
     let finalOrigin = window.location.origin.replace('ais-dev-', 'ais-pre-');
     // 解碼掉 params.toString() 中不必要的 %3A (:) 與 %2F (/) 讓網址看起來更直觀短小
     const decodedHash = params.toString().replace(/%3A/g, ':').replace(/%2F/g, '/');
@@ -508,8 +534,26 @@ export default function App() {
       console.warn('History replace failed');
     }
 
-    // 直接顯示分享連結（不依賴後端 API 也就是實作純前端的「假短網址」）
-    setShareData({ isOpen: true, url: finalUrl, status: 'success' });
+    setShareData({ isOpen: true, url: finalUrl, status: 'loading' });
+
+    // 呼叫後端 API 進行短網址轉換
+    try {
+      const res = await fetch("/api/shorten", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: finalUrl })
+      });
+      if (res.ok) {
+        const shortUrl = await res.text();
+        setShareData({ isOpen: true, url: shortUrl, status: 'success' });
+      } else {
+        // 短網址失敗，維持原本的長網址
+        setShareData({ isOpen: true, url: finalUrl, status: 'success' });
+      }
+    } catch(e) {
+      // 網路錯誤，維持原本的長網址
+      setShareData({ isOpen: true, url: finalUrl, status: 'success' });
+    }
   };
 
   const copyToClipboard = (text: string) => {
@@ -567,7 +611,7 @@ export default function App() {
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2" style={{ color: colors.headline }}>🔗 分享連結已產生！</h3>
                 
                 <div className="w-full bg-black/40 border border-white/10 rounded-lg p-3 overflow-hidden">
-                  <div className="w-full font-mono text-sm break-all select-all text-center leading-relaxed" style={{ color: colors.paragraph }}>
+                  <div className="w-full font-mono text-sm break-all select-all text-center leading-relaxed max-h-32 overflow-y-auto custom-scrollbar" style={{ color: colors.paragraph }}>
                     {shareData.url}
                   </div>
                 </div>
@@ -876,7 +920,13 @@ export default function App() {
           </div>
         </div>
         
-        <TranscriptPanel playerRef={playerRef} audioUrl={audioUrl} currentTime={currentTime} />
+        <TranscriptPanel 
+          playerRef={playerRef} 
+          audioUrl={audioUrl} 
+          currentTime={currentTime} 
+          initialLines={transcriptLines}
+          onLinesChange={setTranscriptLines}
+        />
       </div>
     </div>
   );

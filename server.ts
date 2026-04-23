@@ -2,19 +2,50 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs";
+import crypto from "crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Local fallback DB for massive URLs
+const DB_FILE = path.join(__dirname, "local_urls.json");
+let urlDB: Record<string, string> = {};
+try {
+  if (fs.existsSync(DB_FILE)) {
+    urlDB = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+  }
+} catch(e) {
+  console.warn("Could not load local_urls.json", e);
+}
+
+function saveLocalUrl(url: string, prefix: string): string {
+  const id = crypto.randomUUID().split('-')[0];
+  urlDB[id] = url;
+  fs.writeFileSync(DB_FILE, JSON.stringify(urlDB), "utf-8");
+  return `${prefix}/s/${id}`;
+}
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Increase payload limit for massive LZ string data
+  app.use(express.json({ limit: '10mb' }));
+
+  // Redirect local short links
+  app.get("/s/:id", (req, res) => {
+    const target = urlDB[req.params.id];
+    if (target) {
+      res.redirect(302, target);
+    } else {
+      res.status(404).send("Short link not found or expired.");
+    }
+  });
 
   // API 路由：Proxy 短網址請求 (使用 Reurl.cc 服務)
-  app.get("/api/shorten", async (req, res) => {
-    const url = req.query.url as string;
+  app.post("/api/shorten", async (req, res) => {
+    const url = req.body.url as string;
     if (!url) {
       return res.status(400).json({ error: "Missing URL parameter" });
     }
@@ -37,8 +68,7 @@ async function startServer() {
           return res.send(data.short_url);
         }
       }
-      
-      console.warn("Reurl API returned non-ok status or missing short_url", await response.text());
+      console.warn("Reurl API failed", await response.text());
     } catch (error) {
       console.error("Reurl API error:", error);
     }
@@ -63,12 +93,13 @@ async function startServer() {
             return res.send(shortUrl);
           }
         }
-      } catch (error) {
-        console.warn(`Fallback shorten provider failed: ${providerUrl}`, error);
-      }
+      } catch (error) {}
     }
 
-    res.status(500).send("All URL shortening services failed");
+    // 終極備援：如果外部 API 全面失敗或網址實在太長被拒絕，使用內部儲存！
+    const origin = req.headers.origin || req.protocol + '://' + req.get('host');
+    const localShort = saveLocalUrl(url, origin);
+    return res.send(localShort);
   });
 
   // API 路由：獲取 YouTube 字幕

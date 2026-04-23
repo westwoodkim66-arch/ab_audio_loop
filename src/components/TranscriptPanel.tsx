@@ -2,14 +2,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Type, GoogleGenAI } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2 } from 'lucide-react';
 
-interface POSWord {
+export interface POSWord {
   word: string;
   furigana: string;
   romaji: string;
   pos: string;
 }
 
-interface SubtitleLine {
+export interface SubtitleLine {
   id: string;
   startTime: number | null;
   endTime: number | null;
@@ -22,6 +22,8 @@ export interface TranscriptPanelProps {
   playerRef: React.RefObject<any>;
   audioUrl: string;
   currentTime: number;
+  initialLines?: SubtitleLine[];
+  onLinesChange?: (lines: SubtitleLine[]) => void;
 }
 
 // POS Colors Configuration (Dark Mode Optimized Highlights)
@@ -36,14 +38,28 @@ const POS_STYLES: Record<string, string> = {
   misc: "bg-[#94a1b2]/10 text-[#94a1b2] border-b border-[#94a1b2]/30 px-1.5 py-0.5 rounded-md",
 };
 
-export default function TranscriptPanel({ playerRef, audioUrl, currentTime }: TranscriptPanelProps) {
-  const [lines, setLines] = useState<SubtitleLine[]>([]);
+export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange }: TranscriptPanelProps) {
+  const [lines, setLines] = useState<SubtitleLine[]>(initialLines);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [inputText, setInputText] = useState("");
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Sync with initialLines if it changes
+  useEffect(() => {
+    if (initialLines.length > 0) {
+      setLines(initialLines);
+    }
+  }, [initialLines]);
+
+  // Notify parent when lines change
+  useEffect(() => {
+    if (onLinesChange) {
+      onLinesChange(lines);
+    }
+  }, [lines, onLinesChange]);
 
   // Update active index
   useEffect(() => {
@@ -99,17 +115,49 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime }: Tr
   }, [activeIndex]);
 
   const getGeminiClient = () => {
-    return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("系統未偵測到 GEMINI_API_KEY，請確認環境變數設定。");
+    }
+    return new GoogleGenAI({ apiKey });
   };
 
   const processTextWithGemini = async (text: string, existingLines?: any[]) => {
     try {
       const ai = getGeminiClient();
       
-      // Data to process - split more aggressively by commas and other marks to keep segments short
-      let rawData = existingLines ? [...existingLines] : text.split(/[。\n!?.?;,，]/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
+      const callWithRetry = async (prompt: string, schema: any, maxRetries = 3): Promise<any> => {
+        let attempt = 0;
+        while (attempt < maxRetries) {
+          try {
+            const response = await ai.models.generateContent({
+              model: "gemini-3-flash-preview",
+              contents: prompt,
+              config: {
+                responseMimeType: "application/json",
+                responseSchema: schema
+              }
+            });
+            return response;
+          } catch (error: any) {
+            attempt++;
+            const isRateLimit = error?.message?.includes("429") || error?.status === "RESOURCE_EXHAUSTED";
+            
+            if (isRateLimit && attempt < maxRetries) {
+              const delay = Math.pow(2, attempt) * 5000; // Exponential backoff: 10s, 20s...
+              setStatusText(`API 忙碌中，${Math.round(delay/1000)} 秒後自動重試 (第 ${attempt} 次)...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+            throw error;
+          }
+        }
+      };
 
-      const CHUNK_SIZE = 8; // Process fewer lines per chunk for better split focus
+      // Data to process - split by natural sentence boundaries to allow fuller lines
+      let rawData = existingLines ? [...existingLines] : text.split(/[。\n!?.?]/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
+
+      const CHUNK_SIZE = 15; // Reduce chunk size back to a safer limit to avoid TPM (Tokens Per Minute) issues
       let allProcessedLines: SubtitleLine[] = [];
       setLines([]); // Clear existing
 
@@ -117,82 +165,67 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime }: Tr
         const chunk = rawData.slice(i, i + CHUNK_SIZE);
         setStatusText(`正在處理第 ${i + 1} ~ ${Math.min(i + CHUNK_SIZE, rawData.length)} 段 (共 ${rawData.length} 段)...`);
         
-        const prompt = `You are an expert bilingual linguist (Japanese and English). Process the following transcript segment into very short subtitle-style chunks.
+        const prompt = `You are an expert bilingual linguist (Japanese and English). Process the following transcript segment into subtitle-style chunks.
 CRITICAL RULES:
 - Output ONLY valid JSON.
-- DO NOT add prefix text like "Tagging:" or markdown code blocks (e.g. \`\`\`json).
-- Keep each segment VERY SHORT (ideally 3-8 words). If the input is long, split it into multiple JSON objects in the array.
+- Keep each segment as a natural full phrase or sentence (ideally 5-15 words).
 - "originalText" MUST match input snippet EXACTLY.
-- If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value. DO NOT generate a new translation. Only provide a new one if "providedTranslation" is empty/missing.
 
 For each chunk:
-1. Provide translation (use "providedTranslation" directly if available).
-2. Tokenize the "originalText" into very granular units to ensure accurate furigana alignment. CRITICAL: You MUST separate Kanji from Okurigana (trailing kana). For example, "呼び方" MUST be split into 3 tokens: ["呼", "び", "方"]. "伝わりました" MUST be split into ["伝", "わりました"].
-   *IMPORTANT*: If the source text contains inline furigana in parentheses like "日本(にほん)", you MUST strip the parentheses from the 'word', place "にほん" into the 'furigana' field, and output 'word' simply as "日本". Do not leave parentheses in the word.
-3. For each token: word (cleaned of parentheses), furigana (If the token contains Kanji, output its reading in Hiragana. If the token is ALREADY exclusively Hiragana or Katakana, output ""), romaji (if JP), pos (noun, verb, particle, adjective, pronoun, adverb, punctuation, misc). Assign the root word's POS to its split okurigana as well.
-
-Expectation: Short, punchy lines suitable for a karaoke-style display.
-
-Respond strictly as a JSON array of line objects.
-Each line object should have:
-- "id": string (preserve from input)
-- "originalText": string (preserve exactly)
-- "translation": string
-- "startTime": number (preserve)
-- "endTime": number (preserve)
-- "words": array of word objects
+1. Provide translation.
+2. Tokenize the "originalText" into very granular units. Separate Kanji from Okurigana.
+3. For each token, extract:
+   - "word": The original Japanese token.
+   - "furigana": The reading in Hiragana (empty if already Kana).
+   - "romaji": The standard rōmaji reading.
+   - "pos": noun, verb, particle, adjective, pronoun, adverb, punctuation, misc.
 
 Input data:
 ${JSON.stringify(chunk)}
 `;
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  originalText: { type: Type.STRING },
-                  translation: { type: Type.STRING },
-                  startTime: { type: Type.NUMBER },
-                  endTime: { type: Type.NUMBER },
-                  words: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        word: { type: Type.STRING },
-                        furigana: { type: Type.STRING },
-                        romaji: { type: Type.STRING },
-                        pos: { type: Type.STRING }
-                      }
-                    }
+        const schema = {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              originalText: { type: Type.STRING },
+              translation: { type: Type.STRING },
+              startTime: { type: Type.NUMBER },
+              endTime: { type: Type.NUMBER },
+              words: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    word: { type: Type.STRING },
+                    furigana: { type: Type.STRING },
+                    romaji: { type: Type.STRING },
+                    pos: { type: Type.STRING }
                   }
                 }
               }
             }
           }
-        });
+        };
+
+        const response = await callWithRetry(prompt, schema);
         
         let resText = response.text || "[]";
-        if(resText.startsWith("\`\`\`json")) {
-          resText = resText.replace(/^\`\`\`json\n/, "").replace(/\n\`\`\`$/, "");
-        }
-        
         const parsed = JSON.parse(resText);
-        // Ensure unique IDs in case AI split segments or reused input IDs
+        
         const uniqueParsed = parsed.map((item: any, pIdx: number) => ({
             ...item,
             id: item.id ? `${item.id}_${i}_${pIdx}` : `line_${Date.now()}_${i}_${pIdx}`
         }));
         
         allProcessedLines = [...allProcessedLines, ...uniqueParsed];
-        setLines([...allProcessedLines]); // Progressive update
+        setLines([...allProcessedLines]); 
+
+        if (i + CHUNK_SIZE < rawData.length) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
       }
       
       setStatusText("所有文稿處理完成！");
@@ -258,7 +291,7 @@ ${JSON.stringify(chunk)}
                     setStatusText("正在分析圖片結構...");
                     const ai = getGeminiClient();
                     const response = await ai.models.generateContent({
-                        model: "gemini-2.5-pro",
+                        model: "gemini-3.1-pro-preview",
                         contents: {
                             parts: [
                                 { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
@@ -413,16 +446,20 @@ Each object MUST have:
                          onClick={() => seekToLine(line.startTime)}
                          className={`w-full flex flex-col gap-2 p-4 rounded-3xl transition-all cursor-pointer ${isActive ? 'bg-white/5 border border-[#7f5af0]/50 shadow-2xl shadow-[#7f5af0]/10 scale-[1.02] z-10' : 'hover:bg-white/5 border border-transparent opacity-40 hover:opacity-80'}`}
                        >
-                            <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 max-w-[90%]">
-                                {line.words.map((word, idx) => (
-                                    <div key={idx} className="flex flex-col items-center mx-[1px] leading-none shrink-0 group">
-                                        <span className="text-[10px] text-[#94a1b2] font-medium h-3 mb-1 tracking-wider opacity-90">{word.furigana}</span>
-                                        <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all text-[#fffffe] shadow-sm`}>
-                                            {word.word}
-                                        </span>
-                                        <span className="text-xs text-[#94a1b2]/80 mt-1.5 font-mono italic opacity-90 group-hover:opacity-100 transition-opacity tracking-wide">{word.romaji}</span>
-                                    </div>
-                                ))}
+                            <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 w-full">
+                                {line.words.map((word, idx) => {
+                                    const displayWord = word.word || word.romaji || " ";
+                                    const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
+                                    return (
+                                        <div key={idx} className="flex flex-col items-center mx-[1px] leading-none shrink-0 group">
+                                            <span className="text-[10px] text-[#94a1b2] font-medium h-3 mb-1 tracking-wider opacity-90">{word.furigana}</span>
+                                            <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all text-[#fffffe] shadow-sm min-h-[36px] flex items-center justify-center min-w-[24px]`}>
+                                                {displayWord}
+                                            </span>
+                                            <span className="text-[10px] text-[#94a1b2]/80 mt-1.5 font-mono italic opacity-90 group-hover:opacity-100 transition-opacity tracking-wide min-h-[16px]">{displayRomaji}</span>
+                                        </div>
+                                    );
+                                })}
                             </div>
                             <p className="text-[#94a1b2] text-lg border-t border-white/5 pt-2 mt-1 w-full pl-2 italic">
                                 {line.translation}
