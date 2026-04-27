@@ -240,9 +240,6 @@ export default function App() {
       }
     };
     const handleEnd = () => {
-      if (draggingMarker && pointA !== null && pointB !== null && isRepeatEnabled) {
-        startPlaybackAtA(pointA);
-      }
       setDraggingMarker(null);
     };
     window.addEventListener('mousemove', handleMove);
@@ -339,7 +336,6 @@ export default function App() {
 
   const setA = () => { 
     setPointA(currentTime); 
-    if (pointB !== null && isRepeatEnabled) startPlaybackAtA(currentTime); 
   };
 
   const setB = () => {
@@ -349,7 +345,6 @@ export default function App() {
       return;
     }
     setPointB(currentTime);
-    if (pointA !== null && isRepeatEnabled) startPlaybackAtA(pointA);
   };
 
   const applyInputA = () => {
@@ -357,7 +352,6 @@ export default function App() {
     if (parsed !== null && !isNaN(parsed)) {
       const finalA = duration ? Math.min(parsed, duration) : parsed;
       setPointA(finalA);
-      if (pointB !== null && isRepeatEnabled) startPlaybackAtA(finalA);
     }
   };
 
@@ -370,7 +364,6 @@ export default function App() {
       }
       const finalB = duration ? Math.min(parsed, duration) : parsed;
       setPointB(finalB);
-      if (pointA !== null && isRepeatEnabled) startPlaybackAtA(pointA);
     }
   };
 
@@ -386,7 +379,6 @@ export default function App() {
       if (start !== null && end !== null && start < end) {
         setPointA(start); 
         setPointB(end);
-        if (isRepeatEnabled) startPlaybackAtA(start);
       }
     }
   };
@@ -404,7 +396,6 @@ export default function App() {
       newA = Math.max(0, newA);
       newA = Math.round(newA * 10) / 10;
       if (pB !== null && newA >= pB) newA = Math.max(0, pB - 0.1);
-      playerRef.current?.seekTo(newA, 'seconds');
       return newA;
     });
   };
@@ -418,7 +409,6 @@ export default function App() {
       if (dur) newB = Math.min(dur, newB);
       newB = Math.round(newB * 10) / 10;
       if (pA !== null && newB <= pA) newB = pA + 0.1;
-      playerRef.current?.seekTo(newB, 'seconds');
       return newB;
     });
   };
@@ -435,10 +425,6 @@ export default function App() {
 
   const handleHoldEnd = () => {
     stopHold();
-    const { pointA: pA, isRepeatEnabled: rep } = stateRef.current;
-    if (pA !== null && rep) {
-      startPlaybackAtA(pA);
-    }
   };
 
   const getHoldHandlers = (type: string, delta: number) => ({
@@ -897,7 +883,7 @@ export default function App() {
                   </div>
 
                   {/* Quick Range Input */}
-                  <div className="flex items-center gap-1.5 bg-black/40 rounded px-2 py-1 border border-white/10 flex">
+                  <div className="flex items-center gap-1.5 bg-black/40 rounded px-2 py-1 border border-white/10">
                     <span className="text-[10px] font-black opacity-50 whitespace-nowrap">快速區間</span>
                     <input type="text" value={rangeInput} onChange={(e) => setRangeInput(e.target.value)} onBlur={applyRange} onKeyDown={(e) => e.key === 'Enter' && applyRange()} placeholder="A~B" className="w-14 text-center font-mono text-[11px] bg-transparent outline-none border-b border-white/20 focus:border-white/50 transition-colors pb-0.5" />
                   </div>
