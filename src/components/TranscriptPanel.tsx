@@ -44,6 +44,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const [statusText, setStatusText] = useState("");
   const [inputText, setInputText] = useState("");
   const [activeIndex, setActiveIndex] = useState<number>(-1);
+  const [autoScroll, setAutoScroll] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -89,7 +90,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
 
   // Scroll when index changes
   useEffect(() => {
-    if (activeIndex !== -1 && scrollContainerRef.current) {
+    if (autoScroll && activeIndex !== -1 && scrollContainerRef.current) {
         const activeElement = scrollContainerRef.current.querySelector(`[data-index="${activeIndex}"]`) as HTMLElement;
         if (activeElement) {
             const stickyHeader = document.getElementById('sticky-header');
@@ -112,10 +113,14 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
             });
         }
     }
-  }, [activeIndex]);
+  }, [activeIndex, autoScroll]);
 
   const getGeminiClient = () => {
-    return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+        throw new Error("API Key 未設定 (GEMINI_API_KEY is resolving to undefined or empty). 請在環境變數或專案設定中提供有效的 Gemini API 金鑰。");
+    }
+    return new GoogleGenAI({ apiKey: key });
   };
 
   const processTextWithGemini = async (text: string, existingLines?: any[]) => {
@@ -354,6 +359,70 @@ Each object MUST have:
     }
   };
 
+  const translateToLanguage = async (targetLanguage: string) => {
+    if (lines.length === 0) return;
+    setIsProcessing(true);
+    setStatusText(`正在翻譯至 ${targetLanguage}...`);
+
+    try {
+        const ai = getGeminiClient();
+        const CHUNK_SIZE = 20;
+        let translatedLines = [...lines];
+
+        for (let i = 0; i < translatedLines.length; i += CHUNK_SIZE) {
+            const chunk = translatedLines.slice(i, i + CHUNK_SIZE);
+            setStatusText(`正在翻譯第 ${i + 1} ~ ${Math.min(i + CHUNK_SIZE, translatedLines.length)} 句 (${targetLanguage})...`);
+
+            const prompt = `Translate the following JSON array of subtitle objects into ${targetLanguage}.
+You MUST return the exact same JSON structure, updating ONLY the "translation" field with the translated text.
+
+Input JSON:
+${JSON.stringify(chunk.map((c) => ({ id: c.id, text: c.originalText })))}
+
+Return ONLY a valid JSON array of objects, containing "id" and "translation" fields. No markdown, no backticks.
+`;
+
+            const response = await ai.models.generateContent({
+              model: "gemini-3-flash-preview",
+              contents: prompt,
+              config: {
+                 responseMimeType: "application/json",
+                 responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            id: { type: Type.STRING },
+                            translation: { type: Type.STRING }
+                        }
+                    }
+                 }
+              }
+            });
+
+            let resText = response.text || "[]";
+             if(resText.startsWith("```json")) {
+               resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+             }
+            const parsedTranslations = JSON.parse(resText);
+            
+            parsedTranslations.forEach((pt: any) => {
+                const lineIndex = translatedLines.findIndex(l => l.id === pt.id);
+                if (lineIndex !== -1) {
+                    translatedLines[lineIndex] = { ...translatedLines[lineIndex], translation: pt.translation };
+                }
+            });
+            setLines([...translatedLines]);
+        }
+        setStatusText("翻譯完成！");
+        setTimeout(() => setStatusText(""), 3000);
+    } catch(e: any) {
+        setStatusText(`翻譯失敗: ${e.message}`);
+        console.error(e);
+    }
+    setIsProcessing(false);
+  };
+
   const seekToLine = (time: number | undefined | null) => {
     if (time !== undefined && time !== null && time !== -1 && playerRef.current) {
         playerRef.current.seekTo(time, 'seconds');
@@ -368,7 +437,16 @@ Each object MUST have:
             智慧雙語點讀字幕
         </h2>
         
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
+            <label className="flex items-center gap-2 text-sm font-bold text-[#fffffe] bg-black/20 px-3 py-1.5 rounded-lg border border-white/10 cursor-pointer hover:bg-black/40 transition-colors">
+               <input 
+                 type="checkbox" 
+                 checked={autoScroll} 
+                 onChange={(e) => setAutoScroll(e.target.checked)} 
+                 className="accent-[#7f5af0] w-4 h-4"
+               />
+               自動捲動
+            </label>
             <button 
                onClick={loadYoutubeTranscript}
                disabled={isProcessing}
@@ -427,7 +505,26 @@ Each object MUST have:
                  <span className="px-2 py-0.5 rounded-md bg-[#a855f7]/20 text-[#a855f7] border border-[#a855f7]/30">形容詞</span>
                  <span className="px-2 py-0.5 rounded-md bg-[#14b8a6]/20 text-[#14b8a6] border border-[#14b8a6]/30">代名詞</span>
               </div>
-              <button onClick={() => setLines([])} className="ml-auto text-xs text-[#94a1b2] hover:text-red-400 transition-colors">清除分析</button>
+              <div className="ml-auto flex items-center gap-3">
+                 <select 
+                    disabled={isProcessing}
+                    onChange={(e) => {
+                       if(e.target.value) translateToLanguage(e.target.value);
+                       e.target.value = "";
+                    }}
+                    className="bg-[#2cb67d]/20 text-[#2cb67d] border border-[#2cb67d]/30 text-xs px-2 py-1 rounded-md outline-none cursor-pointer hover:bg-[#2cb67d]/30 transition-colors"
+                 >
+                    <option value="">翻譯為...</option>
+                    <option value="繁體中文">繁體中文</option>
+                    <option value="简体中文">简体中文</option>
+                    <option value="English">English</option>
+                    <option value="日本語">日本語</option>
+                    <option value="한국어">한국어</option>
+                    <option value="Español">Español</option>
+                    <option value="Français">Français</option>
+                 </select>
+                 <button onClick={() => setLines([])} className="text-xs text-[#94a1b2] hover:text-red-400 transition-colors">清除分析</button>
+              </div>
             </div>
 
             <div className="flex flex-col gap-4 w-full pb-24">
@@ -439,9 +536,12 @@ Each object MUST have:
                          key={line.id} 
                          data-index={lIdx}
                          onClick={() => seekToLine(line.startTime)}
-                         className={`w-full flex flex-col gap-2 p-4 rounded-3xl transition-all cursor-pointer ${isActive ? 'bg-white/5 border border-[#7f5af0]/50 shadow-2xl shadow-[#7f5af0]/10 scale-[1.02] z-10' : 'hover:bg-white/5 border border-transparent opacity-40 hover:opacity-80'}`}
+                         className={`w-full flex flex-col gap-2 p-4 rounded-3xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 scale-[1.02] z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-40 hover:opacity-80 hover:bg-white/5'}`}
                        >
-                            <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 max-w-[90%]">
+                            {isActive && (
+                                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-[#7f5af0] rounded-r-full shadow-[0_0_10px_#7f5af0] animate-pulse"></div>
+                            )}
+                            <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 max-w-[90%] md:ml-2">
                                 {line.words.map((word, idx) => {
                                     const displayWord = word.word || word.romaji || " ";
                                     const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
@@ -456,7 +556,7 @@ Each object MUST have:
                                     );
                                 })}
                             </div>
-                            <p className="text-[#94a1b2] text-lg border-t border-white/5 pt-2 mt-1 w-full pl-2 italic">
+                            <p className="text-[#94a1b2] text-lg border-t border-white/5 pt-2 mt-1 w-full pl-2 md:pl-4 italic">
                                 {line.translation}
                             </p>
                        </div>
