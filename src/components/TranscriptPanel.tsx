@@ -273,49 +273,57 @@ ${JSON.stringify(chunk)}
             // handle image to base64
             const reader = new FileReader();
             reader.onload = async (event) => {
-                const base64Data = event.target?.result?.toString().split(',')[1];
-                if(base64Data) {
-                    setStatusText("正在分析圖片結構...");
-                    const ai = getGeminiClient();
-                    const response = await ai.models.generateContent({
-                        model: "gemini-2.5-pro",
-                        contents: {
-                            parts: [
-                                { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
+                try {
+                    const base64Data = event.target?.result?.toString().split(',')[1];
+                    if(base64Data) {
+                        setStatusText("正在分析圖片結構...");
+                        const ai = getGeminiClient();
+                        const response = await ai.models.generateContent({
+                            model: "gemini-3-flash-preview",
+                            contents: {
+                                parts: [
+                                    { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
 CRITICAL INSTRUCTION:
 Return ONLY a raw valid JSON array of objects (no markdown, no backticks).
 Analyze the layout. If the image contains foreign language text (English or Japanese) accompanied by Chinese translation, pair them together accurately paragraph by paragraph.
 Each object MUST have:
 - "originalText": "The foreign text completely transcribed without truncation."
 - "providedTranslation": "The Chinese translation found in the image. Leave empty if none exists."` },
-                                { inlineData: { data: base64Data, mimeType: file.type } }
-                            ]
-                        }
-                    });
-                    
-                    let resText = (response.text || "[]").trim();
-                    if(resText.startsWith("```json")) {
-                      resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
-                    }
-                    
-                    try {
-                        const parsedImageLines = JSON.parse(resText);
-                        setStatusText("圖片讀取成功，開始詞性標記...");
-                        const mappedLines = parsedImageLines.map((line: any, idx: number) => ({
-                            id: `img_${Date.now()}_${idx}`,
-                            originalText: line.originalText,
-                            providedTranslation: line.providedTranslation || "",
-                            startTime: -1,
-                            endTime: -1
-                        })).filter((L: any) => L.originalText.trim() !== "");
+                                    { inlineData: { data: base64Data, mimeType: file.type } }
+                                ]
+                            }
+                        });
                         
-                        await processTextWithGemini("", mappedLines);
-                    } catch(err) {
-                        // Fallback
-                        setInputText(resText);
-                        setStatusText("未能自動解析對照結構，已轉為純文字，請點擊分析！");
-                        setIsProcessing(false);
+                        let resText = (response.text || "[]").trim();
+                        if(resText.startsWith("```json")) {
+                          resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+                        }
+                        
+                        try {
+                            const parsedImageLines = JSON.parse(resText);
+                            setStatusText("圖片讀取成功，開始詞性標記...");
+                            const mappedLines = parsedImageLines.map((line: any, idx: number) => ({
+                                id: `img_${Date.now()}_${idx}`,
+                                originalText: line.originalText,
+                                providedTranslation: line.providedTranslation || "",
+                                startTime: -1,
+                                endTime: -1
+                            })).filter((L: any) => L.originalText.trim() !== "");
+                            
+                            await processTextWithGemini("", mappedLines);
+                        } catch(err) {
+                            // Fallback
+                            setInputText(resText);
+                            setStatusText("未能自動解析對照結構，已轉為純文字，請點擊分析！");
+                            setIsProcessing(false);
+                        }
+                    } else {
+                         setStatusText("圖片分析失敗：無法讀取圖片內容");
+                         setIsProcessing(false);
                     }
+                } catch(err: any) {
+                    setStatusText("圖片分析失敗：" + err.message);
+                    setIsProcessing(false);
                 }
             };
             reader.readAsDataURL(file);
