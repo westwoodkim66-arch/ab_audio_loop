@@ -377,8 +377,12 @@ export default function App() {
   const applyRange = () => {
     const parts = rangeInput.split(/[-~]/);
     if (parts.length === 2) {
-      const start = parseTimeInput(parts[0].trim());
-      const end = parseTimeInput(parts[1].trim());
+      const startStr = parts[0].trim();
+      const endStr = parts[1].trim();
+      
+      const start = startStr === '' ? 0 : parseTimeInput(startStr);
+      const end = parseTimeInput(endStr);
+      
       if (start !== null && end !== null && start < end) {
         setPointA(start); 
         setPointB(end);
@@ -892,6 +896,12 @@ export default function App() {
                     <button onClick={setB} className="ml-1 text-[10px] rounded px-1.5 py-0.5 transition-colors" style={{ backgroundColor: colors.button, color: colors.buttonText }}>設為當前</button>
                   </div>
 
+                  {/* Quick Range Input */}
+                  <div className="flex items-center gap-1.5 bg-black/40 rounded px-2 py-1 border border-white/10 flex">
+                    <span className="text-[10px] font-black opacity-50 whitespace-nowrap">快速區間</span>
+                    <input type="text" value={rangeInput} onChange={(e) => setRangeInput(e.target.value)} onBlur={applyRange} onKeyDown={(e) => e.key === 'Enter' && applyRange()} placeholder="A~B" className="w-14 text-center font-mono text-[11px] bg-transparent outline-none border-b border-white/20 focus:border-white/50 transition-colors pb-0.5" />
+                  </div>
+
                   {/* Repeat Toggle */}
                   <label className="flex items-center gap-1.5 cursor-pointer ml-auto md:ml-2">
                     <input type="checkbox" checked={isRepeatEnabled} onChange={(e) => setIsRepeatEnabled(e.target.checked)} className="w-3 h-3 accent-[#7f5af0]" />
@@ -914,7 +924,7 @@ export default function App() {
             <p className="font-bold mb-1" style={{ color: colors.headline }}>使用指南</p>
             <ul className="space-y-1">
               <li>• 滑鼠點擊進度條可跳轉，按住 <strong style={{ color: colors.headline }}>A/B 標記</strong> 可直接左右拖動設定範圍。</li>
-              <li>• 支援快速格式輸入，例如輸入 `1:15` 或 `75` (秒)；點擊時間旁的 <strong style={{ color: colors.headline }}>+/-</strong> 可微調 0.1 秒，<strong style={{ color: colors.button }}>長按可連續增減</strong>。</li>
+              <li>• 支援時間輸入 (如 `1:15` 或 `75`) 與<strong style={{ color: colors.headline }}>快速區間</strong> (如 `1:07~1:58`、`1:07-1:58` 或 `~1:58`)；時間旁的 <strong style={{ color: colors.headline }}>+/-</strong> 可微調，<strong style={{ color: colors.button }}>長按可連續增減</strong>。</li>
               <li>• 點擊 <strong style={{ color: colors.headline }}>分享圖示 ( <Share2 className="w-3 h-3 inline" /> )</strong> 可以產生專屬連結，方便傳送給朋友或在不同裝置繼續學習。</li>
             </ul>
           </div>

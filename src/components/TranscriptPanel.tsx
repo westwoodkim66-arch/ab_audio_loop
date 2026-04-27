@@ -115,49 +115,17 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   }, [activeIndex]);
 
   const getGeminiClient = () => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("系統未偵測到 GEMINI_API_KEY，請確認環境變數設定。");
-    }
-    return new GoogleGenAI({ apiKey });
+    return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   };
 
   const processTextWithGemini = async (text: string, existingLines?: any[]) => {
     try {
       const ai = getGeminiClient();
       
-      const callWithRetry = async (prompt: string, schema: any, maxRetries = 3): Promise<any> => {
-        let attempt = 0;
-        while (attempt < maxRetries) {
-          try {
-            const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: prompt,
-              config: {
-                responseMimeType: "application/json",
-                responseSchema: schema
-              }
-            });
-            return response;
-          } catch (error: any) {
-            attempt++;
-            const isRateLimit = error?.message?.includes("429") || error?.status === "RESOURCE_EXHAUSTED";
-            
-            if (isRateLimit && attempt < maxRetries) {
-              const delay = Math.pow(2, attempt) * 5000; // Exponential backoff: 10s, 20s...
-              setStatusText(`API 忙碌中，${Math.round(delay/1000)} 秒後自動重試 (第 ${attempt} 次)...`);
-              await new Promise(resolve => setTimeout(resolve, delay));
-              continue;
-            }
-            throw error;
-          }
-        }
-      };
+      // Data to process - split more aggressively by commas and other marks to keep segments short
+      let rawData = existingLines ? [...existingLines] : text.split(/[。\n!?.?;,，]/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
 
-      // Data to process - split by natural sentence boundaries to allow fuller lines
-      let rawData = existingLines ? [...existingLines] : text.split(/[。\n!?.?]/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
-
-      const CHUNK_SIZE = 15; // Reduce chunk size back to a safer limit to avoid TPM (Tokens Per Minute) issues
+      const CHUNK_SIZE = 8; // Process fewer lines per chunk for better split focus
       let allProcessedLines: SubtitleLine[] = [];
       setLines([]); // Clear existing
 
@@ -165,67 +133,86 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         const chunk = rawData.slice(i, i + CHUNK_SIZE);
         setStatusText(`正在處理第 ${i + 1} ~ ${Math.min(i + CHUNK_SIZE, rawData.length)} 段 (共 ${rawData.length} 段)...`);
         
-        const prompt = `You are an expert bilingual linguist (Japanese and English). Process the following transcript segment into subtitle-style chunks.
+        const prompt = `You are an expert bilingual linguist (Japanese and English). Process the following transcript segment into very short subtitle-style chunks.
 CRITICAL RULES:
 - Output ONLY valid JSON.
-- Keep each segment as a natural full phrase or sentence (ideally 5-15 words).
+- DO NOT add prefix text like "Tagging:" or markdown code blocks (e.g. \`\`\`json).
+- Keep each segment VERY SHORT (ideally 3-8 words). If the input is long, split it into multiple JSON objects in the array.
 - "originalText" MUST match input snippet EXACTLY.
+- If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value. DO NOT generate a new translation. Only provide a new one if "providedTranslation" is empty/missing.
 
 For each chunk:
-1. Provide translation.
-2. Tokenize the "originalText" into very granular units. Separate Kanji from Okurigana.
-3. For each token, extract:
-   - "word": The original Japanese token.
-   - "furigana": The reading in Hiragana (empty if already Kana).
-   - "romaji": The standard rōmaji reading.
-   - "pos": noun, verb, particle, adjective, pronoun, adverb, punctuation, misc.
+1. Provide translation (use "providedTranslation" directly if available).
+2. Tokenize the "originalText" into very granular units to ensure accurate furigana alignment. CRITICAL: You MUST separate Kanji from Okurigana (trailing kana). For example, "呼び方" MUST be split into 3 tokens: ["呼", "び", "方"]. "伝わりました" MUST be split into ["伝", "わりました"].
+   *IMPORTANT*: If the source text contains inline furigana in parentheses like "日本(にほん)", you MUST strip the parentheses from the 'word', place "にほん" into the 'furigana' field, and output 'word' simply as "日本". Do not leave parentheses in the word.
+3. For each token, extract the following fields strictly:
+   - "word": The original Japanese token (e.g., "台湾", "私", "に"). This MUST NEVER be empty.
+   - "furigana": The reading in Hiragana. Output "" if the token is already exclusively Hiragana/Katakana.
+   - "romaji": The standard rōmaji reading in English alphabet ONLY (e.g., "taiwan", "watashi", "ni").
+   - "pos": Assign one of these exact strings: noun, verb, particle, adjective, pronoun, adverb, punctuation, misc. Assign the root word's POS to its split okurigana as well.
+
+Expectation: Short, punchy lines suitable for a karaoke-style display.
+
+Respond strictly as a JSON array of line objects.
+Each line object should have:
+- "id": string (preserve from input)
+- "originalText": string (preserve exactly)
+- "translation": string
+- "startTime": number (preserve)
+- "endTime": number (preserve)
+- "words": array of word objects
 
 Input data:
 ${JSON.stringify(chunk)}
 `;
 
-        const schema = {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              id: { type: Type.STRING },
-              originalText: { type: Type.STRING },
-              translation: { type: Type.STRING },
-              startTime: { type: Type.NUMBER },
-              endTime: { type: Type.NUMBER },
-              words: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    word: { type: Type.STRING },
-                    furigana: { type: Type.STRING },
-                    romaji: { type: Type.STRING },
-                    pos: { type: Type.STRING }
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  originalText: { type: Type.STRING },
+                  translation: { type: Type.STRING },
+                  startTime: { type: Type.NUMBER },
+                  endTime: { type: Type.NUMBER },
+                  words: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        word: { type: Type.STRING },
+                        furigana: { type: Type.STRING },
+                        romaji: { type: Type.STRING },
+                        pos: { type: Type.STRING }
+                      }
+                    }
                   }
                 }
               }
             }
           }
-        };
-
-        const response = await callWithRetry(prompt, schema);
+        });
         
         let resText = response.text || "[]";
-        const parsed = JSON.parse(resText);
+        if(resText.startsWith("\`\`\`json")) {
+          resText = resText.replace(/^\`\`\`json\n/, "").replace(/\n\`\`\`$/, "");
+        }
         
+        const parsed = JSON.parse(resText);
+        // Ensure unique IDs in case AI split segments or reused input IDs
         const uniqueParsed = parsed.map((item: any, pIdx: number) => ({
             ...item,
             id: item.id ? `${item.id}_${i}_${pIdx}` : `line_${Date.now()}_${i}_${pIdx}`
         }));
         
         allProcessedLines = [...allProcessedLines, ...uniqueParsed];
-        setLines([...allProcessedLines]); 
-
-        if (i + CHUNK_SIZE < rawData.length) {
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
+        setLines([...allProcessedLines]); // Progressive update
       }
       
       setStatusText("所有文稿處理完成！");
@@ -291,7 +278,7 @@ ${JSON.stringify(chunk)}
                     setStatusText("正在分析圖片結構...");
                     const ai = getGeminiClient();
                     const response = await ai.models.generateContent({
-                        model: "gemini-3.1-pro-preview",
+                        model: "gemini-2.5-pro",
                         contents: {
                             parts: [
                                 { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
@@ -446,7 +433,7 @@ Each object MUST have:
                          onClick={() => seekToLine(line.startTime)}
                          className={`w-full flex flex-col gap-2 p-4 rounded-3xl transition-all cursor-pointer ${isActive ? 'bg-white/5 border border-[#7f5af0]/50 shadow-2xl shadow-[#7f5af0]/10 scale-[1.02] z-10' : 'hover:bg-white/5 border border-transparent opacity-40 hover:opacity-80'}`}
                        >
-                            <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 w-full">
+                            <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 max-w-[90%]">
                                 {line.words.map((word, idx) => {
                                     const displayWord = word.word || word.romaji || " ";
                                     const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
