@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Type, GoogleGenAI } from "@google/genai";
+import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2 } from 'lucide-react';
 
 export interface POSWord {
@@ -47,6 +47,33 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const [autoScroll, setAutoScroll] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const getActiveWordIndex = (line: SubtitleLine, currentTime: number): number => {
+    if (line.startTime === null || line.endTime === null || line.startTime === -1 || line.endTime === -1) return -1;
+    if (currentTime < line.startTime || currentTime > line.endTime) return -1;
+    
+    const duration = line.endTime - line.startTime;
+    if (duration <= 0) return -1;
+    
+    const progress = (currentTime - line.startTime) / duration;
+    
+    // Total text length (based on words themselves)
+    const totalChars = line.words.reduce((acc, w) => acc + (w.word || w.romaji || " ").length, 0);
+    if (totalChars === 0) return -1;
+    
+    let currentChars = 0;
+    for (let i = 0; i < line.words.length; i++) {
+        const wordLen = (line.words[i].word || line.words[i].romaji || " ").length;
+        currentChars += wordLen;
+        
+        const wordProgress = currentChars / totalChars;
+        if (progress <= wordProgress) {
+            return i;
+        }
+    }
+    
+    return line.words.length - 1;
+  };
 
   // Sync with initialLines if it changes
   useEffect(() => {
@@ -115,18 +142,21 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
     }
   }, [activeIndex, autoScroll]);
 
-  const getGeminiClient = () => {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-        throw new Error("API Key 未設定 (GEMINI_API_KEY is resolving to undefined or empty). 請在環境變數或專案設定中提供有效的 Gemini API 金鑰。");
+  const fetchGemini = async (options: any) => {
+    const res = await fetch("/api/gemini/generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+        throw new Error(data.error || "Generation failed");
     }
-    return new GoogleGenAI({ apiKey: key });
+    return { text: data.text };
   };
 
   const processTextWithGemini = async (text: string, existingLines?: any[]) => {
     try {
-      const ai = getGeminiClient();
-      
       // Data to process - split more aggressively by commas and other marks to keep segments short
       let rawData = existingLines ? [...existingLines] : text.split(/[。\n!?.?;,，]/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
 
@@ -171,8 +201,8 @@ Input data:
 ${JSON.stringify(chunk)}
 `;
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
+        const response = await fetchGemini({
+          model: "gemini-2.5-flash",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -282,9 +312,8 @@ ${JSON.stringify(chunk)}
                     const base64Data = event.target?.result?.toString().split(',')[1];
                     if(base64Data) {
                         setStatusText("正在分析圖片結構...");
-                        const ai = getGeminiClient();
-                        const response = await ai.models.generateContent({
-                            model: "gemini-3-flash-preview",
+                        const response = await fetchGemini({
+                            model: "gemini-2.5-flash",
                             contents: {
                                 parts: [
                                     { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
@@ -365,7 +394,6 @@ Each object MUST have:
     setStatusText(`正在翻譯至 ${targetLanguage}...`);
 
     try {
-        const ai = getGeminiClient();
         const CHUNK_SIZE = 20;
         let translatedLines = [...lines];
 
@@ -382,8 +410,8 @@ ${JSON.stringify(chunk.map((c) => ({ id: c.id, text: c.originalText })))}
 Return ONLY a valid JSON array of objects, containing "id" and "translation" fields. No markdown, no backticks.
 `;
 
-            const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
+            const response = await fetchGemini({
+              model: "gemini-2.5-flash",
               contents: prompt,
               config: {
                  responseMimeType: "application/json",
@@ -543,15 +571,16 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                             )}
                             <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 max-w-[90%] md:ml-2">
                                 {line.words.map((word, idx) => {
+                                    const isWordActive = isActive && getActiveWordIndex(line, currentTime) === idx;
                                     const displayWord = word.word || word.romaji || " ";
                                     const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
                                     return (
                                         <div key={idx} className="flex flex-col items-center mx-[1px] leading-none shrink-0 group">
-                                            <span className="text-[10px] text-[#94a1b2] font-medium h-3 mb-1 tracking-wider opacity-90">{word.furigana}</span>
-                                            <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all text-[#fffffe] shadow-sm min-h-[36px] flex items-center justify-center min-w-[24px]`}>
+                                            <span className={`text-[10px] font-medium h-3 mb-1 tracking-wider opacity-90 transition-colors ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2]"}`}>{word.furigana}</span>
+                                            <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all text-[#fffffe] shadow-sm min-h-[36px] flex items-center justify-center min-w-[24px] ${isWordActive ? "ring-2 ring-white scale-110 brightness-150 drop-shadow-[0_0_15px_rgba(255,255,255,0.7)] z-10" : ""}`}>
                                                 {displayWord}
                                             </span>
-                                            <span className="text-[10px] text-[#94a1b2]/80 mt-1.5 font-mono italic opacity-90 group-hover:opacity-100 transition-opacity tracking-wide min-h-[16px]">{displayRomaji}</span>
+                                            <span className={`text-[10px] mt-1.5 font-mono italic opacity-90 group-hover:opacity-100 transition-opacity tracking-wide min-h-[16px] ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2]/80"}`}>{displayRomaji}</span>
                                         </div>
                                     );
                                 })}

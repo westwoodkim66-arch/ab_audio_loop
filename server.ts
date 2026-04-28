@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
+import { GoogleGenAI } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,6 +121,37 @@ async function startServer() {
     } catch (error: any) {
       console.error("Youtube Transcript error:", error);
       res.status(500).json({ error: "Failed to fetch transcript: " + error.message });
+    }
+  });
+
+  // API 路由：Gemini Proxy
+  let geminiKeyIndex = 0;
+  app.post("/api/gemini/generateContent", async (req, res) => {
+    try {
+      const keysEnv = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY;
+      if (!keysEnv) {
+        return res.status(500).json({ error: "API Key 未設定 (GEMINI_API_KEYS or GEMINI_API_KEY is empty). 請在環境變數或專案設定中提供有效的 Gemini API 金鑰。" });
+      }
+
+      // 支援多個 Key，使用逗號分隔
+      const keys = keysEnv.split(",").map(k => k.trim()).filter(k => k.length > 0);
+      if (keys.length === 0) {
+        return res.status(500).json({ error: "找不到有效的 API Key" });
+      }
+
+      // 輪詢選擇 Key
+      const currentKey = keys[geminiKeyIndex % keys.length];
+      geminiKeyIndex++;
+
+      const ai = new GoogleGenAI({ apiKey: currentKey });
+      const { model, contents, config } = req.body;
+      
+      const response = await ai.models.generateContent({ model, contents, config });
+      
+      res.json({ text: response.text });
+    } catch (error: any) {
+      console.error("Gemini API error:", error);
+      res.status(500).json({ error: error.message || "Failed to generate content" });
     }
   });
 
