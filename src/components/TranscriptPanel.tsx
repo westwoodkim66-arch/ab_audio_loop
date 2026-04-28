@@ -143,16 +143,29 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   }, [activeIndex, autoScroll]);
 
   const fetchGemini = async (options: any) => {
-    const res = await fetch("/api/gemini/generateContent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(options)
-    });
-    const data = await res.json();
-    if (!res.ok) {
-        throw new Error(data.error || "Generation failed");
+    try {
+        const res = await fetch("/api/gemini/generateContent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(options)
+        });
+        
+        let data;
+        const textResponse = await res.text();
+        try {
+            data = JSON.parse(textResponse);
+        } catch (e) {
+            throw new Error(`Server returned invalid JSON: ${textResponse.substring(0, 100)}... (Status: ${res.status})`);
+        }
+
+        if (!res.ok) {
+            throw new Error(data.error || "Generation failed: " + res.statusText);
+        }
+        return { text: data.text };
+    } catch (e: any) {
+        console.error("fetchGemini Error:", e);
+        throw e;
     }
-    return { text: data.text };
   };
 
   const processTextWithGemini = async (text: string, existingLines?: any[]) => {
