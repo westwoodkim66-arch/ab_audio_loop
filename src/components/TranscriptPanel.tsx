@@ -147,19 +147,28 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         const res = await fetch("/api/gemini/generateContent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
           body: JSON.stringify(options)
         });
         
-        let data;
         const textResponse = await res.text();
+        
+        let data;
         try {
             data = JSON.parse(textResponse);
         } catch (e) {
-            throw new Error(`Server returned invalid JSON: ${textResponse.substring(0, 100)}... (Status: ${res.status})`);
+            // Check for AI Studio specific Nginx / Cookie intercept issues
+            if (res.status === 405 || textResponse.includes("405 Not Allowed") || textResponse.includes("__cookie_check")) {
+                throw new Error(`由於瀏覽器阻擋了第三方 Cookie（常見於 Safari 或無痕模式），導致系統安全性攔截。請「允許第三方 Cookie」，或複製以下網址到新的分頁開啟本程式：\n${window.location.href}`);
+            }
+            if (res.status === 413 || textResponse.includes("413")) {
+                throw new Error("圖片檔案過大 (Status 413)。請嘗試上傳較小的圖片。");
+            }
+            throw new Error(`伺服器回傳無效的資料格式 (Status ${res.status}): ${textResponse.substring(0, 50)}...`);
         }
 
         if (!res.ok) {
-            throw new Error(data.error || "Generation failed: " + res.statusText);
+            throw new Error(data.error || `Generation failed: ${res.statusText}`);
         }
         return { text: data.text };
     } catch (e: any) {
