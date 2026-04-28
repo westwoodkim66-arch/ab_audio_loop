@@ -322,54 +322,89 @@ ${JSON.stringify(chunk)}
             const reader = new FileReader();
             reader.onload = async (event) => {
                 try {
-                    const base64Data = event.target?.result?.toString().split(',')[1];
-                    if(base64Data) {
-                        setStatusText("正在分析圖片結構...");
-                        const response = await fetchGemini({
-                            model: "gemini-2.5-flash",
-                            contents: {
-                                parts: [
-                                    { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
+                    const img = new Image();
+                    img.onload = async () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        const maxDim = 1024;
+                        if (width > maxDim || height > maxDim) {
+                            if (width > height) {
+                                height = Math.round((height * maxDim) / width);
+                                width = maxDim;
+                            } else {
+                                width = Math.round((width * maxDim) / height);
+                                height = maxDim;
+                            }
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        if (!ctx) {
+                            setStatusText("圖片分析失敗：無法建立 Canvas");
+                            setIsProcessing(false);
+                            return;
+                        }
+                        ctx.drawImage(img, 0, 0, width, height);
+                        const resizedBase64 = canvas.toDataURL(file.type || 'image/jpeg', 0.8).split(',')[1];
+                        
+                        if(resizedBase64) {
+                            setStatusText("正在分析圖片結構...");
+                            try {
+                                const response = await fetchGemini({
+                                    model: "gemini-2.5-flash",
+                                    contents: [
+                                        {
+                                            role: "user",
+                                            parts: [
+                                                { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
 CRITICAL INSTRUCTION:
 Return ONLY a raw valid JSON array of objects (no markdown, no backticks).
 Analyze the layout. If the image contains foreign language text (English or Japanese) accompanied by Chinese translation, pair them together accurately paragraph by paragraph.
 Each object MUST have:
 - "originalText": "The foreign text completely transcribed without truncation."
 - "providedTranslation": "The Chinese translation found in the image. Leave empty if none exists."` },
-                                    { inlineData: { data: base64Data, mimeType: file.type } }
-                                ]
+                                                { inlineData: { data: resizedBase64, mimeType: file.type || 'image/jpeg' } }
+                                            ]
+                                        }
+                                    ]
+                                });
+                                
+                                let resText = (response?.text || "[]").trim();
+                                if(resText.startsWith("```json")) {
+                                  resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+                                }
+                                
+                                try {
+                                    const parsedImageLines = JSON.parse(resText);
+                                    setStatusText("圖片讀取成功，開始詞性標記...");
+                                    const mappedLines = parsedImageLines.map((line: any, idx: number) => ({
+                                        id: `img_${Date.now()}_${idx}`,
+                                        originalText: line.originalText,
+                                        providedTranslation: line.providedTranslation || "",
+                                        startTime: -1,
+                                        endTime: -1
+                                    })).filter((L: any) => L.originalText.trim() !== "");
+                                    
+                                    await processTextWithGemini("", mappedLines);
+                                } catch(err) {
+                                    // Fallback
+                                    setInputText(resText);
+                                    setStatusText("未能自動解析對照結構，已轉為純文字，請點擊分析！");
+                                    setIsProcessing(false);
+                                }
+                            } catch (e: any) {
+                                setStatusText("圖片分析失敗：" + e.message);
+                                setIsProcessing(false);
                             }
-                        });
-                        
-                        let resText = (response.text || "[]").trim();
-                        if(resText.startsWith("```json")) {
-                          resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+                        } else {
+                             setStatusText("圖片分析失敗：無法讀取圖片內容");
+                             setIsProcessing(false);
                         }
-                        
-                        try {
-                            const parsedImageLines = JSON.parse(resText);
-                            setStatusText("圖片讀取成功，開始詞性標記...");
-                            const mappedLines = parsedImageLines.map((line: any, idx: number) => ({
-                                id: `img_${Date.now()}_${idx}`,
-                                originalText: line.originalText,
-                                providedTranslation: line.providedTranslation || "",
-                                startTime: -1,
-                                endTime: -1
-                            })).filter((L: any) => L.originalText.trim() !== "");
-                            
-                            await processTextWithGemini("", mappedLines);
-                        } catch(err) {
-                            // Fallback
-                            setInputText(resText);
-                            setStatusText("未能自動解析對照結構，已轉為純文字，請點擊分析！");
-                            setIsProcessing(false);
-                        }
-                    } else {
-                         setStatusText("圖片分析失敗：無法讀取圖片內容");
-                         setIsProcessing(false);
-                    }
+                    };
+                    img.src = event.target?.result as string;
                 } catch(err: any) {
-                    setStatusText("圖片分析失敗：" + err.message);
+                    setStatusText("圖片分析處理失敗：" + err.message);
                     setIsProcessing(false);
                 }
             };
