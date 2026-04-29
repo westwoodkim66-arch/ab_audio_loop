@@ -73,6 +73,9 @@ export default function App() {
     stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume };
   }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume]);
 
+  const targetSeekRef = useRef<number | null>(null);
+  const seekClearTimer = useRef<NodeJS.Timeout | null>(null);
+
   // 鍵盤快捷鍵處理
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -88,17 +91,23 @@ export default function App() {
         if (!currentUrl) return;
         e.preventDefault();
         setIsPlaying(prev => !prev);
-      } else if (e.code === 'ArrowLeft') {
-        // 左鍵：倒退 5 秒
+      } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+        // 左/右鍵：倒退或快轉 5 秒
         e.preventDefault();
         if (playerRef.current) {
-          playerRef.current.seekTo(currentPos - 5, 'seconds');
-        }
-      } else if (e.code === 'ArrowRight') {
-        // 右鍵：快轉 5 秒
-        e.preventDefault();
-        if (playerRef.current) {
-          playerRef.current.seekTo(currentPos + 5, 'seconds');
+          const delta = e.code === 'ArrowLeft' ? -5 : 5;
+          const baseTime = targetSeekRef.current !== null ? targetSeekRef.current : currentPos;
+          let newTime = Math.max(0, baseTime + delta);
+          if (stateRef.current.duration) {
+            newTime = Math.min(newTime, stateRef.current.duration);
+          }
+          targetSeekRef.current = newTime;
+          playerRef.current.seekTo(newTime, 'seconds');
+          
+          if (seekClearTimer.current) clearTimeout(seekClearTimer.current);
+          seekClearTimer.current = setTimeout(() => {
+            targetSeekRef.current = null;
+          }, 500);
         }
       } else if (e.code === 'ArrowUp') {
         // 上鍵：增加音量
