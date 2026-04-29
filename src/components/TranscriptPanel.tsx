@@ -327,127 +327,192 @@ ${JSON.stringify(chunk)}
 
   const [isPanelDragging, setIsPanelDragging] = useState(false);
 
-  const processFile = async (file: File) => {
-    setIsProcessing(true);
-    setStatusText("正在讀取檔案...");
+  const parseVttTime = (timeStr: string) => {
+    if (!timeStr) return -1;
+    const parts = timeStr.trim().replace(',', '.').split(':');
+    let secs = 0;
+    if (parts.length === 3) {
+        secs += parseFloat(parts[0]) * 3600;
+        secs += parseFloat(parts[1]) * 60;
+        secs += parseFloat(parts[2]);
+    } else if (parts.length === 2) {
+        secs += parseFloat(parts[0]) * 60;
+        secs += parseFloat(parts[1]);
+    }
+    return secs;
+  };
+
+  const parseSubtitles = (content: string, filename: string) => {
+    const lines: any[] = [];
+    const isVtt = filename.toLowerCase().endsWith('.vtt');
+    const isSrt = filename.toLowerCase().endsWith('.srt');
     
-    if (file.type.startsWith('image/')) {
-        try {
-            // handle image to base64
-            const reader = new FileReader();
-            reader.onload = async (event) => {
-                try {
-                    const img = new Image();
-                    img.onload = async () => {
-                        const canvas = document.createElement('canvas');
-                        let width = img.width;
-                        let height = img.height;
-                        const maxDim = 1024;
-                        if (width > maxDim || height > maxDim) {
-                            if (width > height) {
-                                height = Math.round((height * maxDim) / width);
-                                width = maxDim;
-                            } else {
-                                width = Math.round((width * maxDim) / height);
-                                height = maxDim;
-                            }
+    if (isVtt || isSrt) {
+        const blocks = content.split(/\r?\n\r?\n/);
+        for (const block of blocks) {
+            const linesSplit = block.split(/\r?\n/).map(l => l.trim()).filter(l => l !== '');
+            if (linesSplit.length === 0) continue;
+            if (isVtt && linesSplit[0] === 'WEBVTT') continue;
+            
+            const timecodeLine = linesSplit.find(l => l.includes('-->'));
+            if (!timecodeLine) continue;
+            
+            const timecodes = timecodeLine.split('-->').map(s => s.trim());
+            const startTime = parseVttTime(timecodes[0]);
+            const endTime = parseVttTime(timecodes[1]);
+            const textIndex = linesSplit.indexOf(timecodeLine) + 1;
+            const text = linesSplit.slice(textIndex).join('\n').replace(/<[^>]+>/g, '').trim();
+            
+            if (text) {
+                lines.push({
+                    id: `sub_${Date.now()}_${lines.length}`,
+                    originalText: text,
+                    startTime,
+                    endTime
+                });
+            }
+        }
+    }
+    return lines;
+  };
+
+  const parseImageToMappedLines = (file: File): Promise<any[]> => {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            try {
+                const img = new Image();
+                img.onload = async () => {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+                    const maxDim = 1024;
+                    if (width > maxDim || height > maxDim) {
+                        if (width > height) {
+                            height = Math.round((height * maxDim) / width);
+                            width = maxDim;
+                        } else {
+                            width = Math.round((width * maxDim) / height);
+                            height = maxDim;
                         }
-                        canvas.width = width;
-                        canvas.height = height;
-                        const ctx = canvas.getContext('2d');
-                        if (!ctx) {
-                            setStatusText("圖片分析失敗：無法建立 Canvas");
-                            setIsProcessing(false);
-                            return;
-                        }
-                        ctx.drawImage(img, 0, 0, width, height);
-                        const resizedBase64 = canvas.toDataURL(file.type || 'image/jpeg', 0.8).split(',')[1];
-                        
-                        if(resizedBase64) {
-                            setStatusText("正在分析圖片結構...");
-                            try {
-                                const response = await fetchGemini({
-                                    model: "gemini-2.5-flash",
-                                    contents: [
-                                        {
-                                            role: "user",
-                                            parts: [
-                                                { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return resolve([]);
+                    ctx.drawImage(img, 0, 0, width, height);
+                    const resizedBase64 = canvas.toDataURL(file.type || 'image/jpeg', 0.8).split(',')[1];
+                    
+                    if(resizedBase64) {
+                        try {
+                            const response = await fetchGemini({
+                                model: "gemini-2.5-flash",
+                                contents: [
+                                    {
+                                        role: "user",
+                                        parts: [
+                                            { text: `Extract ALL text from this image completely and accurately. DO NOT OMIT ANY TEXT. Be extremely careful to include the very last words and sentences (e.g. sentence endings).
 CRITICAL INSTRUCTION:
 Return ONLY a raw valid JSON array of objects (no markdown, no backticks).
 Analyze the layout. If the image contains foreign language text (English or Japanese) accompanied by Chinese translation, pair them together accurately paragraph by paragraph.
 Each object MUST have:
 - "originalText": "The foreign text completely transcribed without truncation."
 - "providedTranslation": "The Chinese translation found in the image. Leave empty if none exists."` },
-                                                { inlineData: { data: resizedBase64, mimeType: file.type || 'image/jpeg' } }
-                                            ]
-                                        }
-                                    ]
-                                });
-                                
-                                let resText = (response?.text || "[]").trim();
-                                if(resText.startsWith("```json")) {
-                                  resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
-                                }
-                                
-                                try {
-                                    const parsedImageLines = JSON.parse(resText);
-                                    setStatusText("圖片讀取成功，開始詞性標記...");
-                                    const mappedLines = parsedImageLines.map((line: any, idx: number) => ({
-                                        id: `img_${Date.now()}_${idx}`,
-                                        originalText: line.originalText,
-                                        providedTranslation: line.providedTranslation || "",
-                                        startTime: -1,
-                                        endTime: -1
-                                    })).filter((L: any) => L.originalText.trim() !== "");
-                                    
-                                    await processTextWithGemini("", mappedLines);
-                                } catch(err) {
-                                    // Fallback
-                                    setInputText(resText);
-                                    setStatusText("未能自動解析對照結構，已轉為純文字，請點擊分析！");
-                                    setIsProcessing(false);
-                                }
-                            } catch (e: any) {
-                                setStatusText("圖片分析失敗：" + e.message);
-                                setIsProcessing(false);
+                                            { inlineData: { data: resizedBase64, mimeType: file.type || 'image/jpeg' } }
+                                        ]
+                                    }
+                                ]
+                            });
+                            
+                            let resText = (response?.text || "[]").trim();
+                            if(resText.startsWith("```json")) {
+                                resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
                             }
-                        } else {
-                             setStatusText("圖片分析失敗：無法讀取圖片內容");
-                             setIsProcessing(false);
+                            
+                            try {
+                                const parsedImageLines = JSON.parse(resText);
+                                const mappedLines = parsedImageLines.map((line: any, idx: number) => ({
+                                    id: `img_${Date.now()}_${idx}`,
+                                    originalText: line.originalText,
+                                    providedTranslation: line.providedTranslation || "",
+                                    startTime: -1,
+                                    endTime: -1
+                                })).filter((L: any) => L.originalText.trim() !== "");
+                                resolve(mappedLines);
+                            } catch(err) {
+                                resolve([{ id: `img_${Date.now()}`, originalText: resText, providedTranslation: "", startTime: -1, endTime: -1 }]);
+                            }
+                        } catch (e) {
+                            resolve([]);
                         }
-                    };
-                    img.src = event.target?.result as string;
-                } catch(err: any) {
-                    setStatusText("圖片分析處理失敗：" + err.message);
-                    setIsProcessing(false);
-                }
-            };
-            reader.readAsDataURL(file);
-        } catch(e) {
-             setStatusText("圖片分析失敗");
-             setIsProcessing(false);
+                    } else {
+                        resolve([]);
+                    }
+                };
+                img.onerror = () => resolve([]);
+                img.src = event.target?.result as string;
+            } catch(err) {
+                resolve([]);
+            }
+        };
+        reader.onerror = () => resolve([]);
+        reader.readAsDataURL(file);
+    });
+  };
+
+  const processMultipleFiles = async (files: FileList | File[]) => {
+    setIsProcessing(true);
+    let allMappedLines: any[] = [];
+    let combinedText = "";
+    
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setStatusText(`正在處理檔案 ${i + 1}/${files.length}: ${file.name}...`);
+        
+        if (file.type.startsWith('image/')) {
+            const lines = await parseImageToMappedLines(file);
+            if (lines.length > 0) allMappedLines.push(...lines);
+        } else {
+            const text = await file.text();
+            if (file.name.toLowerCase().endsWith('.srt') || file.name.toLowerCase().endsWith('.vtt')) {
+                const lines = parseSubtitles(text, file.name);
+                if (lines.length > 0) allMappedLines.push(...lines);
+            } else {
+                combinedText += text + "\n";
+            }
         }
-    } else {
-        // assume text file like srt, vtt, txt
-        const text = await file.text();
-        setInputText(text);
+    }
+    
+    if (allMappedLines.length > 0 && combinedText.trim()) {
+        const extraLines = combinedText.split(/[。\n!?.?;,，]/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
+        allMappedLines.push(...extraLines);
+    } else if (combinedText.trim() && allMappedLines.length === 0) {
+        setInputText(combinedText);
         setStatusText("檔案載入完成，請點擊「分析文稿」!");
+        setIsProcessing(false);
+        return;
+    }
+
+    if (allMappedLines.length > 0) {
+        setStatusText("所有檔案解析完成，正在進行語言分析與翻譯...");
+        await processTextWithGemini("", allMappedLines);
+    } else {
+        setStatusText("無法解析任何內容。");
         setIsProcessing(false);
     }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await processFile(file);
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    await processMultipleFiles(files);
   };
 
   const handlePanelDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsPanelDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      await processFile(e.dataTransfer.files[0]);
+      await processMultipleFiles(e.dataTransfer.files);
     }
   };
 
@@ -552,7 +617,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                 <Upload className="w-4 h-4" />
                 上傳圖檔/字幕
             </button>
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*,.srt,.vtt,.txt" className="hidden" />
+            <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} accept="image/*,.srt,.vtt,.txt" className="hidden" />
         </div>
       </div>
 
