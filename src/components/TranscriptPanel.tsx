@@ -196,25 +196,23 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         const chunk = rawData.slice(i, i + CHUNK_SIZE);
         setStatusText(`正在處理第 ${i + 1} ~ ${Math.min(i + CHUNK_SIZE, rawData.length)} 段 (共 ${rawData.length} 段)...`);
         
-        const prompt = `You are an expert bilingual linguist (Japanese and English). Process the following transcript segment into very short subtitle-style chunks.
+        const prompt = `You are an expert linguist. The user will provide a transcript segment that might be in Japanese, English, or a mix. 
+Process the segment into very short subtitle-style chunks.
 CRITICAL RULES:
-- Output ONLY valid JSON.
-- DO NOT add prefix text like "Tagging:" or markdown code blocks (e.g. \`\`\`json).
+- Output ONLY valid JSON array.
+- "originalText" MUST match the input snippet EXACTLY in its original language. DO NOT translate "originalText". If it's English, keep it English.
+- "translation" should be the Traditional Chinese (繁體中文) translation of the original text. If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value.
 - Keep each segment VERY SHORT (ideally 3-8 words). If the input is long, split it into multiple JSON objects in the array.
-- "originalText" MUST match input snippet EXACTLY.
-- If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value. DO NOT generate a new translation. Only provide a new one if "providedTranslation" is empty/missing.
 
 For each chunk:
-1. Provide translation (use "providedTranslation" directly if available).
-2. Tokenize the "originalText" into very granular units to ensure accurate furigana alignment. CRITICAL: You MUST separate Kanji from Okurigana (trailing kana). For example, "呼び方" MUST be split into 3 tokens: ["呼", "び", "方"]. "伝わりました" MUST be split into ["伝", "わりました"].
-   *IMPORTANT*: If the source text contains inline furigana in parentheses like "日本(にほん)", you MUST strip the parentheses from the 'word', place "にほん" into the 'furigana' field, and output 'word' simply as "日本". Do not leave parentheses in the word.
-3. For each token, extract the following fields strictly:
-   - "word": The original Japanese token (e.g., "台湾", "私", "に"). This MUST NEVER be empty.
-   - "furigana": The reading in Hiragana. Output "" if the token is already exclusively Hiragana/Katakana.
-   - "romaji": The standard rōmaji reading in English alphabet ONLY (e.g., "taiwan", "watashi", "ni").
-   - "pos": Assign one of these exact strings: noun, verb, particle, adjective, pronoun, adverb, punctuation, misc. Assign the root word's POS to its split okurigana as well.
-
-Expectation: Short, punchy lines suitable for a karaoke-style display.
+1. Tokenize the "originalText" into granular units:
+   - If the text is Japanese: Separate Kanji from Okurigana (trailing kana). For example, "呼び方" MUST be split into 3 tokens: ["呼", "び", "方"]. "伝わりました" MUST be split into ["伝", "わりました"]. If inline furigana in parentheses exists like "日本(にほん)", strip parentheses and put "にほん" into 'furigana'.
+   - If the text is English: Split by words and punctuation normally.
+2. For each token, extract the following fields strictly:
+   - "word": The original token (e.g., "台湾", "私", "apple", "running", "."). This MUST NEVER be empty.
+   - "furigana": For Japanese, the reading in Hiragana (output "" if already Kana). For English, output "".
+   - "romaji": For Japanese, the rōmaji reading. For English, output "".
+   - "pos": Assign one of these exact strings: noun, verb, particle, adjective, pronoun, adverb, punctuation, misc.
 
 Respond strictly as a JSON array of line objects.
 Each line object should have:
