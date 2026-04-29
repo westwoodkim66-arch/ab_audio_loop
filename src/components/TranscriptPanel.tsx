@@ -158,8 +158,14 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
             data = JSON.parse(textResponse);
         } catch (e) {
             // Check for AI Studio specific Nginx / Cookie intercept issues
-            if (res.status === 405 || textResponse.includes("405 Not Allowed") || textResponse.includes("__cookie_check")) {
-                throw new Error(`由於瀏覽器阻擋了第三方 Cookie（常見於 Safari 或無痕模式），導致系統安全性攔截。請「允許第三方 Cookie」，或複製以下網址到新的分頁開啟本程式：\n${window.location.href}`);
+            if (res.status === 404) {
+               throw new Error("API 端點不存在 (404)，請確認 functions/ 資料夾已正確部署。");
+            }
+            if (res.status === 500 && textResponse.includes("GEMINI_API_KEY")) {
+               throw new Error("請至 Cloudflare Pages → Settings → Environment variables 新增 GEMINI_API_KEY。");
+            }
+            if (res.status === 405) {
+               throw new Error("HTTP 405，請確認 Cloudflare Pages Functions 已啟用。");
             }
             if (res.status === 413 || textResponse.includes("413")) {
                 throw new Error("圖片檔案過大 (Status 413)。請嘗試上傳較小的圖片。");
