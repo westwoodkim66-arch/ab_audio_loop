@@ -185,8 +185,8 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
 
   const processTextWithGemini = async (text: string, existingLines?: any[]) => {
     try {
-      // Data to process - split more aggressively by commas and other marks to keep segments short
-      let rawData = existingLines ? [...existingLines] : text.split(/[。\n!?.?;,，]/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
+      // Data to process - split by end of sentence marks, avoiding commas to prevent over-fragmentation
+      let rawData = existingLines ? [...existingLines] : text.split(/(?<=[。！？\!\?\n])/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
 
       const CHUNK_SIZE = 8; // Process fewer lines per chunk for better split focus
       let allProcessedLines: SubtitleLine[] = [];
@@ -202,7 +202,7 @@ CRITICAL RULES:
 - Output ONLY valid JSON array.
 - "originalText" MUST match the input snippet EXACTLY in its original language. DO NOT translate "originalText". If it's English, keep it English.
 - "translation" should be the Traditional Chinese (繁體中文) translation of the original text. If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value.
-- Keep each segment natural. For English, split by sentences or natural speaking pauses (e.g. 5-15 words). For Japanese, split into short, readable phrases. If the input is long, split it into multiple JSON objects in the array.
+- Keep each segment natural and readable. For English, PRESERVE COMPLETE SENTENCES. Do not split short clauses or split by commas. A chunk should ideally be a full thought or sentence (e.g. 5-25 words). For Japanese, preserve complete sentences or natural, readable phrases. Merge short fragments if necessary to form complete thoughts.
 
 For each chunk:
 1. Tokenize the "originalText" into granular units:
