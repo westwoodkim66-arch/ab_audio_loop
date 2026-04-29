@@ -197,12 +197,12 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         setStatusText(`正在處理第 ${i + 1} ~ ${Math.min(i + CHUNK_SIZE, rawData.length)} 段 (共 ${rawData.length} 段)...`);
         
         const prompt = `You are an expert linguist. The user will provide a transcript segment that might be in Japanese, English, or a mix. 
-Process the segment into very short subtitle-style chunks.
+Process the segment into natural subtitle chunks.
 CRITICAL RULES:
 - Output ONLY valid JSON array.
 - "originalText" MUST match the input snippet EXACTLY in its original language. DO NOT translate "originalText". If it's English, keep it English.
 - "translation" should be the Traditional Chinese (繁體中文) translation of the original text. If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value.
-- Keep each segment VERY SHORT (ideally 3-8 words). If the input is long, split it into multiple JSON objects in the array.
+- Keep each segment natural. For English, split by sentences or natural speaking pauses (e.g. 5-15 words). For Japanese, split into short, readable phrases. If the input is long, split it into multiple JSON objects in the array.
 
 For each chunk:
 1. Tokenize the "originalText" into granular units:
@@ -649,7 +649,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
       )}
 
       {lines.length > 0 && (
-        <div ref={scrollContainerRef} className="p-4 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all min-h-[400px]">
+        <div ref={scrollContainerRef} className="p-4 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all max-h-[60vh] overflow-y-auto min-h-[400px] styled-scrollbar">
             <div className="flex border-b border-white/5 pb-4 mb-4 gap-4 items-center">
               <span className="text-sm font-bold text-[#94a1b2]">詞性標記：</span>
               <div className="flex flex-wrap gap-2 text-[10px] items-center">
@@ -681,7 +681,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
               </div>
             </div>
 
-            <div className="flex flex-col gap-4 w-full pb-24">
+            <div className="flex flex-col gap-1 w-full pb-24">
                {lines.map((line, lIdx) => {
                    const isActive = lIdx === activeIndex;
                    
@@ -690,23 +690,34 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                          key={line.id} 
                          data-index={lIdx}
                          onClick={() => seekToLine(line.startTime)}
-                         className={`w-full flex flex-col gap-2 p-4 rounded-3xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 scale-[1.02] z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-40 hover:opacity-80 hover:bg-white/5'}`}
+                         className={`w-full flex flex-col gap-2 px-4 py-2.5 rounded-3xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 scale-[1.02] z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-40 hover:opacity-80 hover:bg-white/5'}`}
                        >
                             {isActive && (
                                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-[#7f5af0] rounded-r-full shadow-[0_0_10px_#7f5af0] animate-pulse"></div>
                             )}
-                            <div className="flex flex-wrap items-end gap-y-4 gap-x-2 mb-1 max-w-[90%] md:ml-2">
+                            <div className="flex flex-wrap items-end gap-y-2 gap-x-1.5 mb-1 max-w-[90%] md:ml-2">
                                 {line.words.map((word, idx) => {
                                     const isWordActive = isActive && getActiveWordIndex(line, currentTime) === idx;
                                     const displayWord = word.word || word.romaji || " ";
                                     const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
+                                    
+                                    let posLabel = "";
+                                    const isEnglish = /^[A-Za-z0-9'\-.,!?;]+$/.test(displayWord.trim());
+                                    if (isEnglish) {
+                                        if (word.pos === "noun") posLabel = "n.";
+                                        else if (word.pos === "verb") posLabel = "v.";
+                                        else if (word.pos === "adjective") posLabel = "adj.";
+                                    }
+                                    
+                                    const bottomLabel = displayRomaji || posLabel;
+
                                     return (
                                         <div key={idx} className="flex flex-col items-center mx-[1px] leading-none shrink-0 group">
                                             <span className={`text-[10px] font-medium h-3 mb-1 tracking-wider opacity-90 transition-colors ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2]"}`}>{word.furigana}</span>
                                             <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all text-[#fffffe] shadow-sm min-h-[36px] flex items-center justify-center min-w-[24px] ${isWordActive ? "ring-2 ring-white scale-110 brightness-150 drop-shadow-[0_0_15px_rgba(255,255,255,0.7)] z-10" : ""}`}>
                                                 {displayWord}
                                             </span>
-                                            <span className={`text-[10px] mt-1.5 font-mono italic opacity-90 group-hover:opacity-100 transition-opacity tracking-wide min-h-[16px] ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2]/80"}`}>{displayRomaji}</span>
+                                            <span className={`text-[10px] mt-1.5 font-mono italic opacity-90 group-hover:opacity-100 transition-opacity tracking-wide min-h-[16px] ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2]/80"}`}>{bottomLabel}</span>
                                         </div>
                                     );
                                 })}
