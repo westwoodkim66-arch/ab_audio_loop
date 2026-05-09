@@ -690,7 +690,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                          key={line.id} 
                          data-index={lIdx}
                          onClick={() => seekToLine(line.startTime)}
-                         className={`w-full flex flex-col gap-2 px-4 py-2.5 rounded-3xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 scale-[1.02] z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-40 hover:opacity-80 hover:bg-white/5'}`}
+                         className={`w-full flex flex-col gap-2 px-4 py-2.5 rounded-3xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 scale-[1.02] z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-70 hover:opacity-100 hover:bg-white/5'}`}
                        >
                             {isActive && (
                                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-[#7f5af0] rounded-r-full shadow-[0_0_10px_#7f5af0] animate-pulse"></div>
@@ -713,16 +713,16 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
 
                                     return (
                                         <div key={idx} className="flex flex-col items-center mx-[1px] leading-none shrink-0 group">
-                                            <span className={`text-[10px] font-medium h-3 mb-1 tracking-wider opacity-90 transition-colors ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2]"}`}>{word.furigana}</span>
-                                            <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all text-[#fffffe] shadow-sm min-h-[36px] flex items-center justify-center min-w-[24px] ${isWordActive ? "ring-2 ring-white scale-110 brightness-150 drop-shadow-[0_0_15px_rgba(255,255,255,0.7)] z-10" : ""}`}>
+                                            <span className={`text-[10px] font-medium h-3 mb-1 tracking-wider transition-colors ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana}</span>
+                                            <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all shadow-sm min-h-[36px] flex items-center justify-center min-w-[24px] ${isWordActive ? "ring-2 ring-white scale-110 brightness-150 drop-shadow-[0_0_15px_rgba(255,255,255,0.7)] z-10 text-[#fffffe]" : ""}`}>
                                                 {displayWord}
                                             </span>
-                                            <span className={`text-[10px] mt-1.5 font-mono italic opacity-90 group-hover:opacity-100 transition-opacity tracking-wide min-h-[16px] ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2]/80"}`}>{bottomLabel}</span>
+                                            <span className={`text-[10px] mt-1.5 font-mono italic transition-opacity tracking-wide min-h-[16px] ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel}</span>
                                         </div>
                                     );
                                 })}
                             </div>
-                            <p className="text-[#94a1b2] text-lg border-t border-white/5 pt-2 mt-1 w-full pl-2 md:pl-4 italic">
+                            <p className="text-[#fffffe] opacity-80 text-lg border-t border-white/5 pt-2 mt-1 w-full pl-2 md:pl-4 italic">
                                 {line.translation}
                             </p>
                        </div>

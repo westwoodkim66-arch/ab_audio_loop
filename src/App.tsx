@@ -624,7 +624,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="max-w-3xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
+      <div className="max-w-4xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
         
         <div className="p-10 text-center border-b border-opacity-5 rounded-t-2xl md:rounded-t-3xl" style={{ borderColor: colors.paragraph }}>
           <h1 className="text-4xl font-bold mb-3 flex items-center justify-center gap-3" style={{ color: colors.headline }}>
@@ -767,7 +767,7 @@ export default function App() {
                 </button>
                 
                 <div className="flex-grow flex flex-col gap-1.5">
-                  <div className="flex justify-between items-baseline px-1">
+                  <div className="flex justify-between items-center px-1">
                     <span className="font-mono text-sm font-bold tracking-tight" style={{ color: colors.headline }}>{formatTime(currentTime)} <span className="opacity-40 font-normal">/ {formatTime(duration)}</span></span>
                     
                     {/* Compact Speed & Volume */}
