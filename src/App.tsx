@@ -42,7 +42,6 @@ export default function App() {
   const [draggingMarker, setDraggingMarker] = useState<string | null>(null);
   const [fileName, setFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
-  const [shareData, setShareData] = useState<{isOpen: boolean, url: string, status: 'idle' | 'loading' | 'success'} | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
   
   // 新增 transcript state 讓 App 可存儲字串資料以便分享
@@ -226,9 +225,9 @@ export default function App() {
   useEffect(() => { setInputA(formatForInput(pointA)); }, [pointA]);
   useEffect(() => { setInputB(formatForInput(pointB)); }, [pointB]);
 
-  const startPlaybackAtA = (targetA: number) => {
-    if (targetA !== null && playerRef.current) {
-      playerRef.current.seekTo(targetA, 'seconds');
+  const jumpToAndPlay = (targetTime: number | null) => {
+    if (targetTime !== null && playerRef.current) {
+      playerRef.current.seekTo(targetTime, 'seconds');
       setIsPlaying(true);
     }
   };
@@ -249,6 +248,12 @@ export default function App() {
       }
     };
     const handleEnd = () => {
+      const { pointA: pA, pointB: pB } = stateRef.current;
+      if (draggingMarker === 'A' && pA !== null) {
+        jumpToAndPlay(pA);
+      } else if (draggingMarker === 'B' && pB !== null) {
+        jumpToAndPlay(Math.max(0, pB - 10));
+      }
       setDraggingMarker(null);
     };
     window.addEventListener('mousemove', handleMove);
@@ -265,7 +270,7 @@ export default function App() {
 
   useEffect(() => {
     if (isRepeatEnabled && pointA !== null && pointB !== null && currentTime >= pointB) {
-      startPlaybackAtA(pointA);
+      jumpToAndPlay(pointA);
     }
   }, [currentTime, pointA, pointB, isRepeatEnabled]);
 
@@ -345,6 +350,7 @@ export default function App() {
 
   const setA = () => { 
     setPointA(currentTime); 
+    jumpToAndPlay(currentTime);
   };
 
   const setB = () => {
@@ -354,6 +360,7 @@ export default function App() {
       return;
     }
     setPointB(currentTime);
+    jumpToAndPlay(Math.max(0, currentTime - 10));
   };
 
   const applyInputA = () => {
@@ -361,6 +368,7 @@ export default function App() {
     if (parsed !== null && !isNaN(parsed)) {
       const finalA = duration ? Math.min(parsed, duration) : parsed;
       setPointA(finalA);
+      jumpToAndPlay(finalA);
     }
   };
 
@@ -373,6 +381,7 @@ export default function App() {
       }
       const finalB = duration ? Math.min(parsed, duration) : parsed;
       setPointB(finalB);
+      jumpToAndPlay(Math.max(0, finalB - 10));
     }
   };
 
@@ -388,6 +397,7 @@ export default function App() {
       if (start !== null && end !== null && start < end) {
         setPointA(start); 
         setPointB(end);
+        jumpToAndPlay(start);
       }
     }
   };
@@ -397,6 +407,9 @@ export default function App() {
     if (holdInterval.current) clearInterval(holdInterval.current);
   };
 
+  const latestARef = useRef<number | null>(null);
+  const latestBRef = useRef<number | null>(null);
+
   const adjustAInner = (delta: number) => {
     setPointA(prevA => {
       const { pointB: pB, currentTime: cT } = stateRef.current;
@@ -405,6 +418,7 @@ export default function App() {
       newA = Math.max(0, newA);
       newA = Math.round(newA * 10) / 10;
       if (pB !== null && newA >= pB) newA = Math.max(0, pB - 0.1);
+      latestARef.current = newA;
       return newA;
     });
   };
@@ -418,6 +432,7 @@ export default function App() {
       if (dur) newB = Math.min(dur, newB);
       newB = Math.round(newB * 10) / 10;
       if (pA !== null && newB <= pA) newB = pA + 0.1;
+      latestBRef.current = newB;
       return newB;
     });
   };
@@ -432,8 +447,15 @@ export default function App() {
     }, 400);
   };
 
-  const handleHoldEnd = () => {
+  const handleHoldEnd = (type: string) => {
     stopHold();
+    setTimeout(() => {
+      if (type === 'A' && latestARef.current !== null) {
+        jumpToAndPlay(latestARef.current);
+      } else if (type === 'B' && latestBRef.current !== null) {
+        jumpToAndPlay(Math.max(0, latestBRef.current - 10));
+      }
+    }, 50); // slight delay to ensure state sets resolve if we strictly needed them, though the ref is sync
   };
 
   const getHoldHandlers = (type: string, delta: number) => ({
@@ -444,11 +466,11 @@ export default function App() {
     },
     onPointerUp: (e: React.PointerEvent) => {
       e.currentTarget.releasePointerCapture(e.pointerId);
-      handleHoldEnd();
+      handleHoldEnd(type);
     },
     onPointerCancel: (e: React.PointerEvent) => {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-      stopHold();
+       e.currentTarget.releasePointerCapture(e.pointerId);
+       handleHoldEnd(type);
     },
     onContextMenu: (e: React.MouseEvent) => e.preventDefault()
   });
@@ -471,10 +493,7 @@ export default function App() {
 
   const handleShare = async () => {
     if (!audioUrl) {
-      setShareData({ isOpen: true, url: '', status: 'idle' });
-      // Temporary toast replacement:
       alert("❌ 目前沒有可分享的音檔。");
-      setShareData(null);
       return;
     }
     if (audioUrl.startsWith('blob:')) {
@@ -533,7 +552,7 @@ export default function App() {
       console.warn('History replace failed');
     }
 
-    setShareData({ isOpen: true, url: finalUrl, status: 'loading' });
+    setSuccessMessage('正在產生連結...');
 
     // 呼叫後端 API 進行短網址轉換
     try {
@@ -543,16 +562,19 @@ export default function App() {
         body: JSON.stringify({ url: finalUrl })
       });
       if (res.ok) {
-        const shortUrl = await res.text();
-        setShareData({ isOpen: true, url: shortUrl, status: 'success' });
-      } else {
-        // 短網址失敗，維持原本的長網址
-        setShareData({ isOpen: true, url: finalUrl, status: 'success' });
+        finalUrl = await res.text();
       }
     } catch(e) {
       // 網路錯誤，維持原本的長網址
-      setShareData({ isOpen: true, url: finalUrl, status: 'success' });
     }
+
+    try {
+      await navigator.clipboard.writeText(finalUrl);
+      setSuccessMessage('🔗 連結已成功複製到剪貼簿！');
+    } catch (err) {
+      setSuccessMessage('🔗 連結產生成功，但無法自動複製！');
+    }
+    setTimeout(() => setSuccessMessage(''), 3000);
   };
 
   const copyToClipboard = (text: string) => {
@@ -595,55 +617,6 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col items-center py-12 px-4 font-sans relative" style={{ backgroundColor: colors.background, color: colors.paragraph }}>
       
-      {shareData?.isOpen && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 mobile-touch-none">
-          <div className="max-w-md w-full rounded-2xl border aspect-video flex flex-col justify-center items-center shadow-2xl relative" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
-            <button onClick={() => setShareData(null)} className="absolute top-4 right-4 opacity-50 hover:opacity-100 transition-opacity">✕</button>
-            {shareData.status === 'loading' ? (
-              <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
-                <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin mb-4" style={{ borderColor: `${colors.button}40`, borderTopColor: colors.button }}></div>
-                <h3 className="text-lg font-bold" style={{ color: colors.headline }}>正在產生短網址...</h3>
-                <p className="text-sm mt-2 opacity-60" style={{ color: colors.paragraph }}>請稍候片刻</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center px-6 w-full animate-in fade-in zoom-in duration-300">
-                <h3 className="text-xl font-bold mb-4 flex items-center gap-2" style={{ color: colors.headline }}>🔗 分享連結已產生！</h3>
-                
-                <div className="w-full bg-black/40 border border-white/10 rounded-lg p-3 overflow-hidden">
-                  <div className="w-full font-mono text-sm break-all select-all text-center leading-relaxed max-h-32 overflow-y-auto custom-scrollbar" style={{ color: colors.paragraph }}>
-                    {shareData.url}
-                  </div>
-                </div>
-
-                <div className="flex w-full gap-3 mt-6">
-                  {navigator.share && (
-                    <button 
-                      onClick={() => {
-                        navigator.share({ title: 'A-B Loop 分享', url: shareData.url })
-                        .then(() => setShareData(null))
-                        .catch(() => {});
-                      }}
-                      className="flex-1 py-4 rounded-xl flex items-center justify-center gap-2 font-black transition-all hover:scale-105 active:scale-95"
-                      style={{ backgroundColor: colors.tertiary, color: colors.background }}
-                    >
-                      <span>💌</span> 傳送朋友
-                    </button>
-                  )}
-                  <button 
-                    onClick={() => copyToClipboard(shareData.url)}
-                    className="flex-1 py-4 rounded-xl flex items-center justify-center gap-2 font-black transition-all hover:scale-105 active:scale-95"
-                    style={{ backgroundColor: colors.button, color: colors.buttonText }}
-                  >
-                    <span>📋</span> 點擊複製
-                  </button>
-                </div>
-                <p className="text-xs text-center opacity-40 mt-4" style={{ color: colors.paragraph }}>如遇到無法產生短網址的狀況，我們已為您準備好安全的長網址，請直接複製或分享即可。</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {successMessage && (
         <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-in fade-in slide-in-from-top-4" style={{ backgroundColor: colors.tertiary, color: colors.background, borderColor: colors.stroke }}>
           <FileAudio className="w-5 h-5" />
@@ -744,9 +717,9 @@ export default function App() {
                    onEnded={() => {
                      if (isRepeatEnabled) {
                        if (pointA !== null) {
-                         startPlaybackAtA(pointA);
+                         jumpToAndPlay(pointA);
                        } else {
-                         startPlaybackAtA(0);
+                         jumpToAndPlay(0);
                        }
                      } else {
                        setIsPlaying(false);
