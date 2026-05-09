@@ -252,7 +252,7 @@ export default function App() {
       if (draggingMarker === 'A' && pA !== null) {
         jumpToAndPlay(pA);
       } else if (draggingMarker === 'B' && pB !== null) {
-        jumpToAndPlay(Math.max(0, pB - 10));
+        jumpToAndPlay(Math.max(0, pB - 5));
       }
       setDraggingMarker(null);
     };
@@ -269,8 +269,8 @@ export default function App() {
   }, [draggingMarker, duration, pointA, pointB, isRepeatEnabled]);
 
   useEffect(() => {
-    if (isRepeatEnabled && pointA !== null && pointB !== null && currentTime >= pointB) {
-      jumpToAndPlay(pointA);
+    if (isRepeatEnabled && pointB !== null && currentTime >= pointB) {
+      jumpToAndPlay(pointA !== null ? pointA : 0);
     }
   }, [currentTime, pointA, pointB, isRepeatEnabled]);
 
@@ -360,7 +360,7 @@ export default function App() {
       return;
     }
     setPointB(currentTime);
-    jumpToAndPlay(Math.max(0, currentTime - 10));
+    jumpToAndPlay(Math.max(0, currentTime - 5));
   };
 
   const applyInputA = () => {
@@ -381,7 +381,7 @@ export default function App() {
       }
       const finalB = duration ? Math.min(parsed, duration) : parsed;
       setPointB(finalB);
-      jumpToAndPlay(Math.max(0, finalB - 10));
+      jumpToAndPlay(Math.max(0, finalB - 5));
     }
   };
 
@@ -453,7 +453,7 @@ export default function App() {
       if (type === 'A' && latestARef.current !== null) {
         jumpToAndPlay(latestARef.current);
       } else if (type === 'B' && latestBRef.current !== null) {
-        jumpToAndPlay(Math.max(0, latestBRef.current - 10));
+        jumpToAndPlay(Math.max(0, latestBRef.current - 5));
       }
     }, 50); // slight delay to ensure state sets resolve if we strictly needed them, though the ref is sync
   };
@@ -850,7 +850,7 @@ export default function App() {
                   <div className="flex items-center gap-1.5 bg-black/40 rounded px-1.5 py-1 border border-white/10">
                     <span className="text-[10px] font-black opacity-50">A</span>
                     <button {...getHoldHandlers('A', -0.1)} className="hover:bg-white/20 rounded p-0.5"><Minus className="w-3 h-3 opacity-70" /></button>
-                    <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="w-10 text-center font-mono text-[11px] bg-transparent outline-none" />
+                    <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="w-14 text-center font-mono text-[11px] bg-transparent outline-none" />
                     <button {...getHoldHandlers('A', 0.1)} className="hover:bg-white/20 rounded p-0.5"><Plus className="w-3 h-3 opacity-70" /></button>
                     <button onClick={setA} className="ml-1 text-[10px] bg-white/10 hover:bg-white/20 rounded px-1.5 py-0.5 transition-colors">設為當前</button>
                   </div>
@@ -859,7 +859,7 @@ export default function App() {
                   <div className="flex items-center gap-1.5 bg-black/40 rounded px-1.5 py-1 border border-white/10" style={{ borderColor: 'rgba(127, 90, 240, 0.3)' }}>
                     <span className="text-[10px] font-black" style={{ color: colors.button }}>B</span>
                     <button {...getHoldHandlers('B', -0.1)} className="hover:bg-white/20 rounded p-0.5"><Minus className="w-3 h-3 opacity-70" /></button>
-                    <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="w-10 text-center font-mono text-[11px] bg-transparent outline-none" style={{ color: colors.button }} />
+                    <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="w-14 text-center font-mono text-[11px] bg-transparent outline-none" style={{ color: colors.button }} />
                     <button {...getHoldHandlers('B', 0.1)} className="hover:bg-white/20 rounded p-0.5"><Plus className="w-3 h-3 opacity-70" /></button>
                     <button onClick={setB} className="ml-1 text-[10px] rounded px-1.5 py-0.5 transition-colors" style={{ backgroundColor: colors.button, color: colors.buttonText }}>設為當前</button>
                   </div>
