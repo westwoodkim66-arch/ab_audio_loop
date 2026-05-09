@@ -51,6 +51,55 @@ export default function App() {
   const [isHoveringBar, setIsHoveringBar] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
 
+  // --- Active Subtitle Overlay Logic ---
+  const activeLineIndex = useMemo(() => {
+    if (!transcriptLines || transcriptLines.length === 0) return -1;
+    let idx = transcriptLines.findIndex(line => 
+      line.startTime !== undefined && line.endTime !== undefined && 
+      line.startTime !== -1 && line.endTime !== -1 &&
+      currentTime >= line.startTime && currentTime <= line.endTime
+    );
+    // If we're strictly between lines, find the last active line (optional, but follows TranscriptPanel)
+    if (idx === -1 && transcriptLines[0]?.startTime !== -1 && transcriptLines[0]?.startTime !== undefined) {
+      for (let i = transcriptLines.length - 1; i >= 0; i--) {
+        if (transcriptLines[i].startTime !== undefined && transcriptLines[i].startTime !== -1 && currentTime >= (transcriptLines[i].startTime as number)) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    return idx;
+  }, [currentTime, transcriptLines]);
+
+  const activeWordIndex = useMemo(() => {
+    if (activeLineIndex === -1 || !transcriptLines) return -1;
+    const line = transcriptLines[activeLineIndex];
+    if (line.startTime == null || line.endTime == null || line.startTime === -1 || line.endTime === -1) return -1;
+    if (currentTime < line.startTime || currentTime > line.endTime) return -1;
+    
+    const duration = line.endTime - line.startTime;
+    if (duration <= 0) return -1;
+    
+    const progress = (currentTime - line.startTime) / duration;
+    
+    const totalChars = line.words.reduce((acc, w) => acc + (w.word || w.romaji || " ").length, 0);
+    if (totalChars === 0) return -1;
+    
+    let currentChars = 0;
+    for (let i = 0; i < line.words.length; i++) {
+        const wordLen = (line.words[i].word || line.words[i].romaji || " ").length;
+        currentChars += wordLen;
+        
+        const wordProgress = currentChars / totalChars;
+        if (progress <= wordProgress) {
+            return i;
+        }
+    }
+    return line.words.length - 1;
+  }, [activeLineIndex, currentTime, transcriptLines]);
+
+  const activeLine = activeLineIndex !== -1 ? transcriptLines[activeLineIndex] : null;
+
   const playerRef = useRef<any>(null);
   const progressBarRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -703,7 +752,7 @@ export default function App() {
           <div className="px-4 md:px-8 py-3">
             {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
             <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
-              <div className="aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
+              <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
                  <Player
                    ref={playerRef}
                    url={audioUrl}
@@ -755,6 +804,33 @@ export default function App() {
                      vimeo: { playerOptions: { playsinline: true, autoplay: true } }
                    } as any}
                  />
+
+                 {/* Subtitle Overlay for Video Player */}
+                 {isVideo && activeLine && (
+                   <div className="absolute bottom-2 md:bottom-4 left-0 w-full px-4 flex flex-col items-center justify-end pointer-events-none z-10 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                     <div className="flex flex-wrap items-center justify-center gap-x-1 md:gap-x-1.5 bg-black/60 px-3 py-1 md:px-4 md:py-1.5 rounded-lg backdrop-blur-sm max-w-[95%]">
+                       {activeLine.words.map((word, i) => {
+                         const isWordActive = i === activeWordIndex;
+                         const wordText = word.word || word.romaji || "";
+                         return (
+                           <span 
+                             key={i} 
+                             className={`text-xs sm:text-sm md:text-base font-bold transition-all duration-300 ease-out transform ${isWordActive ? 'text-[#7f5af0] -translate-y-0.5 scale-110 drop-shadow-[0_0_8px_rgba(127,90,240,0.8)]' : 'text-white/90'}`}
+                           >
+                             {wordText}
+                           </span>
+                         )
+                       })}
+                     </div>
+                     {activeLine.translation && (
+                       <div className="mt-1 md:mt-1.5 flex justify-center transition-all duration-300">
+                         <span className="text-[10px] md:text-xs font-medium text-white bg-black/70 px-2 md:px-3 py-0.5 md:py-1 rounded shadow-sm text-center line-clamp-1 max-w-[95%]">
+                           {activeLine.translation}
+                         </span>
+                       </div>
+                     )}
+                   </div>
+                 )}
               </div>
             </div>
 
