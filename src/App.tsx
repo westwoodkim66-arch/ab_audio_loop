@@ -766,25 +766,9 @@ export default function App() {
                    {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-1" />}
                 </button>
                 
-                <div className="flex-grow flex flex-col gap-1.5">
+                <div className="flex-grow flex flex-col gap-1.5 justify-center">
                   <div className="flex justify-between items-center px-1">
                     <span className="font-mono text-sm font-bold tracking-tight" style={{ color: colors.headline }}>{formatTime(currentTime)} <span className="opacity-40 font-normal">/ {formatTime(duration)}</span></span>
-                    
-                    {/* Compact Speed & Volume */}
-                    <div className="hidden md:flex items-center gap-4">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
-                        <div className="flex bg-white/5 rounded px-1 py-0.5">
-                          <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">-</button>
-                          <span className="text-xs font-mono font-bold w-6 text-center">{playbackRate.toFixed(1)}</span>
-                          <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">+</button>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
-                        <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
-                      </div>
-                    </div>
                   </div>
 
                   <div className="relative h-6 flex items-center group/bar">
@@ -839,6 +823,24 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                </div>
+
+                {/* Compact Speed & Volume */}
+                <div className="hidden md:flex flex-shrink-0 flex-col items-end gap-1 px-1">
+                    <div className="flex items-center gap-4 h-full">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
+                        <div className="flex bg-white/5 rounded px-1 py-0.5">
+                          <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">-</button>
+                          <span className="text-xs font-mono font-bold w-6 text-center">{playbackRate.toFixed(1)}</span>
+                          <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">+</button>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
+                        <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
+                      </div>
+                    </div>
                 </div>
               </div>
 

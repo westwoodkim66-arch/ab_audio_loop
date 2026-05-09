@@ -118,23 +118,16 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   // Scroll when index changes
   useEffect(() => {
     if (autoScroll && activeIndex !== -1 && scrollContainerRef.current) {
-        const activeElement = scrollContainerRef.current.querySelector(`[data-index="${activeIndex}"]`) as HTMLElement;
+        const container = scrollContainerRef.current;
+        const activeElement = container.querySelector(`[data-index="${activeIndex}"]`) as HTMLElement;
         if (activeElement) {
-            const stickyHeader = document.getElementById('sticky-header');
-            const stickyHeight = stickyHeader ? stickyHeader.offsetHeight : 0;
+            const elementRect = activeElement.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
             
-            // Calculate available viewport height below the sticky header
-            const availableHeight = window.innerHeight - stickyHeight;
-            const elementHeight = activeElement.offsetHeight;
+            // Calculate distance to move element to the vertical center of the container
+            const distanceY = (elementRect.top + elementRect.height / 2) - (containerRect.top + containerRect.height / 2);
             
-            // We want the element to be in the vertical center of the available space
-            const targetY = stickyHeight + (availableHeight / 2) - (elementHeight / 2);
-            
-            // getBoundingClientRect().top gives position relative to current viewport.
-            // distance to scroll is current top minus target Y
-            const distanceY = activeElement.getBoundingClientRect().top - targetY;
-            
-            window.scrollBy({
+            container.scrollBy({
                 top: distanceY,
                 behavior: 'smooth'
             });
