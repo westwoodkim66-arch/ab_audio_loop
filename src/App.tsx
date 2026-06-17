@@ -117,17 +117,6 @@ export default function App() {
   }, [audioUrl]);
 
 
-  const isDailymotion = useMemo(() => {
-    if (!audioUrl) return false;
-    return audioUrl.includes('dailymotion.com') || audioUrl.includes('dai.ly');
-  }, [audioUrl]);
-
-  const dmVideoId = useMemo(() => {
-    if (!audioUrl) return null;
-    const match = audioUrl.match(/(?:dailymotion\.com\/video\/|dai\.ly\/)([^&?]+)/);
-    return match ? match[1] : null;
-  }, [audioUrl]);
-
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
   const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate });
@@ -837,7 +826,7 @@ export default function App() {
                         file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
                         youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
                         vimeo: { playerOptions: { playsinline: true, autoplay: true } },
-                        dailymotion: { params: { autoplay: true, mute: false, 'ui-start-screen-info': false } }
+                        dailymotion: { params: { autoplay: true, mute: false, 'ui-start-screen-info': false, 'ui-logo': false, 'ui-theme': 'dark' } }
                       } as any}
                     />
 
