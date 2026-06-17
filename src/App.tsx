@@ -116,8 +116,8 @@ export default function App() {
             audioUrl.includes('.mp4');
   }, [audioUrl]);
 
-  // --- 自製 Dailymotion API 支援 ---
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // --- 官方 Dailymotion SDK 整合 ---
+  const dmPlayerRef = useRef<any>(null);
 
   const isDailymotion = useMemo(() => {
     if (!audioUrl) return false;
@@ -130,153 +130,162 @@ export default function App() {
     return match ? match[1] : null;
   }, [audioUrl]);
 
-  const dmReadyCalledRef = useRef<string>('');
-
+  // 主要的播放器初始化 & 事件處理
   useEffect(() => {
-    if (isDailymotion && duration > 0 && dmReadyCalledRef.current !== audioUrl) {
-      dmReadyCalledRef.current = audioUrl;
-      const searchParams = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.slice(1));
-      const aParam = searchParams.get('a') || hashParams.get('a');
-      if (aParam && playerRef.current) {
-        playerRef.current.seekTo(parseFloat(aParam), 'seconds');
-      }
-      setError('');
-      setSuccessMessage('影片載入成功！');
-      setTimeout(() => setSuccessMessage(''), 3000);
+    if (!isDailymotion || !dmVideoId) {
+      dmPlayerRef.current = null;
+      return;
     }
-  }, [isDailymotion, duration, audioUrl]);
 
-  const postDMCommand = useCallback((command: string, args: any[] = []) => {
-    if (isDailymotion && iframeRef.current && iframeRef.current.contentWindow) {
-      const win = iframeRef.current.contentWindow;
-      try {
-        if (command === 'play') {
-          win.postMessage('play', '*');
-        } else if (command === 'pause') {
-          win.postMessage('pause', '*');
-        } else if (command === 'seek' && args.length > 0) {
-          win.postMessage(`seek=${args[0]}`, '*');
-        } else if (command === 'volume' && args.length > 0) {
-          win.postMessage(`volume=${args[0]}`, '*');
-        } else if (command === 'speed' && args.length > 0) {
-          win.postMessage(`speed=${args[0]}`, '*');
-          win.postMessage(`playbackRate=${args[0]}`, '*');
+    let active = true;
+    let playerInstance: any = null;
+
+    const initPlayer = () => {
+      if (!(window as any).dailymotion) {
+        setTimeout(() => {
+          if (active) initPlayer();
+        }, 100);
+        return;
+      }
+
+      const container = document.getElementById('my-player');
+      if (!container) {
+        setTimeout(() => {
+          if (active) initPlayer();
+        }, 100);
+        return;
+      }
+
+      container.innerHTML = "";
+
+      (window as any).dailymotion.createPlayer('my-player', {
+        video: dmVideoId,
+        params: {
+          autoplay: isPlaying,
+          mute: volume === 0,
         }
-      } catch (err) {}
+      }).then((player: any) => {
+        if (!active) return;
+        dmPlayerRef.current = player;
+        playerInstance = player;
 
-      try {
-        win.postMessage(JSON.stringify({ command, args }), '*');
-        win.postMessage(JSON.stringify({ event: command, value: args[0] }), '*');
-      } catch (err) {}
-    }
-  }, [isDailymotion]);
+        // 同步一開始的狀態
+        player.setVolume(volume);
+        player.setPlaybackRate(playbackRate);
 
+        const events = (window as any).dailymotion.events || {};
+        const PLAY_EVENT = events.PLAYER_PLAY || "play";
+        const PAUSE_EVENT = events.PLAYER_PAUSE || "pause";
+        const TIMEUPDATE_EVENT = events.PLAYER_TIMEUPDATE || "timeupdate";
+        const DURATIONCHANGE_EVENT = events.PLAYER_DURATIONCHANGE || "durationchange";
+        const ENDED_EVENT = events.PLAYER_ENDED || "ended";
+
+        player.on(PLAY_EVENT, () => {
+          setIsPlaying(true);
+        });
+
+        player.on(PAUSE_EVENT, () => {
+          setIsPlaying(false);
+        });
+
+        player.on(TIMEUPDATE_EVENT, () => {
+          if (player.state && typeof player.state.currentTime === "number") {
+            setCurrentTime(player.state.currentTime);
+          }
+        });
+
+        player.on(DURATIONCHANGE_EVENT, () => {
+          if (player.state && typeof player.state.duration === "number") {
+            setDuration(player.state.duration);
+          }
+        });
+
+        player.on(ENDED_EVENT, () => {
+          const latestState = stateRef.current;
+          if (latestState.isRepeatEnabled) {
+            const target = latestState.pointA !== null ? latestState.pointA : 0;
+            player.seek(target);
+            player.play();
+          } else {
+            setIsPlaying(false);
+          }
+        });
+
+        if (player.state) {
+          if (typeof player.state.duration === "number" && player.state.duration > 0) {
+            setDuration(player.state.duration);
+          }
+          if (typeof player.state.currentTime === "number") {
+            setCurrentTime(player.state.currentTime);
+          }
+        }
+
+        // 檢查網址中是否有 active timestamp `a`
+        const searchParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.slice(1));
+        const aParam = searchParams.get('a') || hashParams.get('a');
+        if (aParam) {
+          player.seek(parseFloat(aParam));
+        }
+
+        setError('');
+        setSuccessMessage('影片播放器準備就緒！');
+        setTimeout(() => setSuccessMessage(''), 3000);
+      }).catch((err: any) => {
+        console.error("Dailymotion error", err);
+        setError("Dailymotion 播放器初始化失敗。");
+      });
+    };
+
+    initPlayer();
+
+    return () => {
+      active = false;
+      if (playerInstance) {
+        try { playerInstance.pause(); } catch(e){}
+      }
+      dmPlayerRef.current = null;
+    };
+  }, [dmVideoId, isDailymotion]);
+
+  // 控制播放與暫停
   useEffect(() => {
-    if (isDailymotion) {
+    if (isDailymotion && dmPlayerRef.current) {
       if (isPlaying) {
-        postDMCommand('play');
+        try { dmPlayerRef.current.play(); } catch(e){}
       } else {
-        postDMCommand('pause');
+        try { dmPlayerRef.current.pause(); } catch(e){}
       }
     }
-  }, [isPlaying, isDailymotion, postDMCommand]);
+  }, [isPlaying, isDailymotion]);
 
+  // 控制音量
   useEffect(() => {
-    if (isDailymotion) {
-      postDMCommand('volume', [volume]);
+    if (isDailymotion && dmPlayerRef.current) {
+      try { dmPlayerRef.current.setVolume(volume); } catch(e){}
     }
-  }, [volume, isDailymotion, postDMCommand]);
+  }, [volume, isDailymotion]);
 
+  // 控制語速倍率
   useEffect(() => {
-    if (isDailymotion) {
-      postDMCommand('speed', [playbackRate]);
+    if (isDailymotion && dmPlayerRef.current) {
+      try { dmPlayerRef.current.setPlaybackRate(playbackRate); } catch(e){}
     }
-  }, [playbackRate, isDailymotion, postDMCommand]);
+  }, [playbackRate, isDailymotion]);
 
+  // 設定 PlayerRef 控制介面 seekTo 相容
   useEffect(() => {
     if (isDailymotion) {
       playerRef.current = {
         seekTo: (seconds: number) => {
-          postDMCommand('seek', [seconds]);
+          if (dmPlayerRef.current) {
+            try { dmPlayerRef.current.seek(seconds); } catch(e){}
+          }
         },
         getInternalPlayer: () => null
       } as any;
     }
-  }, [isDailymotion, postDMCommand]);
-
-  useEffect(() => {
-    if (!isDailymotion || !dmVideoId) return;
-
-    setDuration(0);
-    setCurrentTime(0);
-
-    const handleMessage = (e: MessageEvent) => {
-      if (!e.origin.includes('dailymotion.com')) return;
-      if (!e.data) return;
-
-      let eventName = '';
-      let timeVal: number | null = null;
-      let durVal: number | null = null;
-
-      try {
-        if (typeof e.data === 'string') {
-          if (e.data.startsWith('{')) {
-            const parsed = JSON.parse(e.data);
-            eventName = parsed.event || parsed.type || '';
-            if (parsed.time !== undefined) timeVal = Number(parsed.time);
-            else if (parsed.currentTime !== undefined) timeVal = Number(parsed.currentTime);
-            if (parsed.duration !== undefined) durVal = Number(parsed.duration);
-          } else {
-            const params = new URLSearchParams(e.data);
-            eventName = params.get('event') || params.get('type') || '';
-            const t = params.get('time') || params.get('currentTime') || params.get('seconds');
-            if (t) timeVal = parseFloat(t);
-            const d = params.get('duration');
-            if (d) durVal = parseFloat(d);
-          }
-        } else if (typeof e.data === 'object' && e.data !== null) {
-          eventName = e.data.event || e.data.type || '';
-          if (e.data.time !== undefined) timeVal = Number(e.data.time);
-          else if (e.data.currentTime !== undefined) timeVal = Number(e.data.currentTime);
-          if (e.data.duration !== undefined) durVal = Number(e.data.duration);
-        }
-      } catch (err) {
-        // Ignored
-      }
-
-      if (timeVal !== null && !isNaN(timeVal)) {
-        setCurrentTime(timeVal);
-      }
-      if (durVal !== null && !isNaN(durVal)) {
-        setDuration(durVal);
-      }
-
-      if (eventName === 'play') {
-        setIsPlaying(true);
-      } else if (eventName === 'pause') {
-        setIsPlaying(false);
-      } else if (eventName === 'ended') {
-        if (isRepeatEnabled) {
-          const target = pointA !== null ? pointA : 0;
-          postDMCommand('seek', [target]);
-          postDMCommand('play');
-        } else {
-          setIsPlaying(false);
-        }
-      } else if (eventName === 'apiready' || eventName === 'ready' || eventName === 'canplay') {
-        const currentVol = stateRef.current.volume;
-        const currentSpeed = stateRef.current.playbackRate;
-        postDMCommand('volume', [currentVol]);
-        postDMCommand('speed', [currentSpeed]);
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => {
-      window.removeEventListener('message', handleMessage);
-    };
-  }, [isDailymotion, dmVideoId, isRepeatEnabled, pointA, postDMCommand]);
+  }, [isDailymotion]);
 
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
@@ -935,28 +944,9 @@ export default function App() {
             <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
               <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
                   {isDailymotion && dmVideoId ? (
-                    <iframe
-                      ref={iframeRef}
-                      id="dmplayer"
-                      name="dmplayer"
-                      src={`https://www.dailymotion.com/embed/video/${dmVideoId}?api=1&id=dmplayer&autoplay=1&mute=0`}
-                      width="100%"
-                      height="100%"
-                      allow="autoplay; picture-in-picture"
-                      allowFullScreen
-                      frameBorder="0"
+                    <div
+                      id="my-player"
                       className="w-full h-full object-contain"
-                      onLoad={() => {
-                        setTimeout(() => {
-                          postDMCommand('volume', [volume]);
-                          postDMCommand('speed', [playbackRate]);
-                          if (isPlaying) {
-                            postDMCommand('play');
-                          } else {
-                            postDMCommand('pause');
-                          }
-                        }, 800);
-                      }}
                     />
                   ) : (
                     <Player
