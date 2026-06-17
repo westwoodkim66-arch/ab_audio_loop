@@ -344,8 +344,18 @@ export default function App() {
       // 同步觸發底層播放器，避免 React 狀態更新延遲導致 iOS/Line 判定非使用者主動操作
       const internal = playerRef.current?.getInternalPlayer();
       if (internal) {
-        if (typeof internal.playVideo === 'function') internal.playVideo();
-        else if (typeof internal.play === 'function') internal.play().catch(() => {});
+        try {
+          if (typeof internal.playVideo === 'function') {
+            internal.playVideo();
+          } else if (typeof internal.play === 'function') {
+            const playPromise = internal.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+              playPromise.catch(() => {});
+            }
+          }
+        } catch (e) {
+          console.warn('Direct play triggered error', e);
+        }
       }
     }
     setIsPlaying(!isPlaying);
@@ -825,8 +835,7 @@ export default function App() {
                       config={{
                         file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
                         youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
-                        vimeo: { playerOptions: { playsinline: true, autoplay: true } },
-                        dailymotion: { params: { autoplay: true, mute: false, 'ui-start-screen-info': false, 'ui-logo': false, 'ui-theme': 'dark' } }
+                        vimeo: { playerOptions: { playsinline: true, autoplay: true } }
                       } as any}
                     />
 
