@@ -116,8 +116,6 @@ export default function App() {
             audioUrl.includes('.mp4');
   }, [audioUrl]);
 
-  // --- 官方 Dailymotion SDK 整合 ---
-  const dmPlayerRef = useRef<any>(null);
 
   const isDailymotion = useMemo(() => {
     if (!audioUrl) return false;
@@ -129,163 +127,6 @@ export default function App() {
     const match = audioUrl.match(/(?:dailymotion\.com\/video\/|dai\.ly\/)([^&?]+)/);
     return match ? match[1] : null;
   }, [audioUrl]);
-
-  // 主要的播放器初始化 & 事件處理
-  useEffect(() => {
-    if (!isDailymotion || !dmVideoId) {
-      dmPlayerRef.current = null;
-      return;
-    }
-
-    let active = true;
-    let playerInstance: any = null;
-
-    const initPlayer = () => {
-      if (!(window as any).dailymotion) {
-        setTimeout(() => {
-          if (active) initPlayer();
-        }, 100);
-        return;
-      }
-
-      const container = document.getElementById('my-player');
-      if (!container) {
-        setTimeout(() => {
-          if (active) initPlayer();
-        }, 100);
-        return;
-      }
-
-      container.innerHTML = "";
-
-      (window as any).dailymotion.createPlayer('my-player', {
-        video: dmVideoId,
-        params: {
-          autoplay: isPlaying,
-          mute: volume === 0,
-        }
-      }).then((player: any) => {
-        if (!active) return;
-        dmPlayerRef.current = player;
-        playerInstance = player;
-
-        // 同步一開始的狀態
-        player.setVolume(volume);
-        player.setPlaybackRate(playbackRate);
-
-        const events = (window as any).dailymotion.events || {};
-        const PLAY_EVENT = events.PLAYER_PLAY || "play";
-        const PAUSE_EVENT = events.PLAYER_PAUSE || "pause";
-        const TIMEUPDATE_EVENT = events.PLAYER_TIMEUPDATE || "timeupdate";
-        const DURATIONCHANGE_EVENT = events.PLAYER_DURATIONCHANGE || "durationchange";
-        const ENDED_EVENT = events.PLAYER_ENDED || "ended";
-
-        player.on(PLAY_EVENT, () => {
-          setIsPlaying(true);
-        });
-
-        player.on(PAUSE_EVENT, () => {
-          setIsPlaying(false);
-        });
-
-        player.on(TIMEUPDATE_EVENT, () => {
-          if (player.state && typeof player.state.currentTime === "number") {
-            setCurrentTime(player.state.currentTime);
-          }
-        });
-
-        player.on(DURATIONCHANGE_EVENT, () => {
-          if (player.state && typeof player.state.duration === "number") {
-            setDuration(player.state.duration);
-          }
-        });
-
-        player.on(ENDED_EVENT, () => {
-          const latestState = stateRef.current;
-          if (latestState.isRepeatEnabled) {
-            const target = latestState.pointA !== null ? latestState.pointA : 0;
-            player.seek(target);
-            player.play();
-          } else {
-            setIsPlaying(false);
-          }
-        });
-
-        if (player.state) {
-          if (typeof player.state.duration === "number" && player.state.duration > 0) {
-            setDuration(player.state.duration);
-          }
-          if (typeof player.state.currentTime === "number") {
-            setCurrentTime(player.state.currentTime);
-          }
-        }
-
-        // 檢查網址中是否有 active timestamp `a`
-        const searchParams = new URLSearchParams(window.location.search);
-        const hashParams = new URLSearchParams(window.location.hash.slice(1));
-        const aParam = searchParams.get('a') || hashParams.get('a');
-        if (aParam) {
-          player.seek(parseFloat(aParam));
-        }
-
-        setError('');
-        setSuccessMessage('影片播放器準備就緒！');
-        setTimeout(() => setSuccessMessage(''), 3000);
-      }).catch((err: any) => {
-        console.error("Dailymotion error", err);
-        setError("Dailymotion 播放器初始化失敗。");
-      });
-    };
-
-    initPlayer();
-
-    return () => {
-      active = false;
-      if (playerInstance) {
-        try { playerInstance.pause(); } catch(e){}
-      }
-      dmPlayerRef.current = null;
-    };
-  }, [dmVideoId, isDailymotion]);
-
-  // 控制播放與暫停
-  useEffect(() => {
-    if (isDailymotion && dmPlayerRef.current) {
-      if (isPlaying) {
-        try { dmPlayerRef.current.play(); } catch(e){}
-      } else {
-        try { dmPlayerRef.current.pause(); } catch(e){}
-      }
-    }
-  }, [isPlaying, isDailymotion]);
-
-  // 控制音量
-  useEffect(() => {
-    if (isDailymotion && dmPlayerRef.current) {
-      try { dmPlayerRef.current.setVolume(volume); } catch(e){}
-    }
-  }, [volume, isDailymotion]);
-
-  // 控制語速倍率
-  useEffect(() => {
-    if (isDailymotion && dmPlayerRef.current) {
-      try { dmPlayerRef.current.setPlaybackRate(playbackRate); } catch(e){}
-    }
-  }, [playbackRate, isDailymotion]);
-
-  // 設定 PlayerRef 控制介面 seekTo 相容
-  useEffect(() => {
-    if (isDailymotion) {
-      playerRef.current = {
-        seekTo: (seconds: number) => {
-          if (dmPlayerRef.current) {
-            try { dmPlayerRef.current.seek(seconds); } catch(e){}
-          }
-        },
-        getInternalPlayer: () => null
-      } as any;
-    }
-  }, [isDailymotion]);
 
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
@@ -943,12 +784,6 @@ export default function App() {
             {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
             <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
               <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
-                  {isDailymotion && dmVideoId ? (
-                    <div
-                      id="my-player"
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
                     <Player
                       ref={(player: any) => {
                         if (player) {
@@ -1001,10 +836,10 @@ export default function App() {
                       config={{
                         file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
                         youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
-                        vimeo: { playerOptions: { playsinline: true, autoplay: true } }
+                        vimeo: { playerOptions: { playsinline: true, autoplay: true } },
+                        dailymotion: { params: { autoplay: true, mute: false, 'ui-start-screen-info': false } }
                       } as any}
                     />
-                  )}
 
                  {/* Subtitle Overlay for Video Player */}
                  {isVideo && activeLine && (
