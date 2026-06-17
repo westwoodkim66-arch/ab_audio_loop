@@ -110,6 +110,7 @@ export default function App() {
            audioUrl.includes('youtu.be') || 
            audioUrl.includes('vimeo.com') ||
            audioUrl.includes('dailymotion.com') ||
+           audioUrl.includes('dai.ly') ||
            audioUrl.includes('twitch.tv') ||
            audioUrl.includes('facebook.com') ||
            audioUrl.includes('.mp4');
@@ -186,11 +187,14 @@ export default function App() {
     // 獨立平台極致縮短支援
     const vParam = searchParams.get('v') || hashParams.get('v');     // YouTube
     const vmParam = searchParams.get('vm') || hashParams.get('vm');  // Vimeo
+    const dmParam = searchParams.get('dm') || hashParams.get('dm');  // Dailymotion
     
     if (vParam) {
       urlParam = `https://www.youtube.com/watch?v=${vParam}`;
     } else if (vmParam) {
       urlParam = `https://vimeo.com/${vmParam}`;
+    } else if (dmParam) {
+      urlParam = `https://www.dailymotion.com/video/${dmParam}`;
     }
 
     const aParam = searchParams.get('a') || hashParams.get('a');
@@ -273,6 +277,13 @@ export default function App() {
 
   useEffect(() => { setInputA(formatForInput(pointA)); }, [pointA]);
   useEffect(() => { setInputB(formatForInput(pointB)); }, [pointB]);
+
+  useEffect(() => {
+    if (duration > 0) {
+      setPointA(prev => (prev !== null && prev > duration) ? duration : prev);
+      setPointB(prev => (prev !== null && prev > duration) ? duration : prev);
+    }
+  }, [duration]);
 
   const jumpToAndPlay = (targetTime: number | null) => {
     if (targetTime !== null && playerRef.current) {
@@ -444,9 +455,12 @@ export default function App() {
       const end = parseTimeInput(endStr);
       
       if (start !== null && end !== null && start < end) {
-        setPointA(start); 
-        setPointB(end);
-        jumpToAndPlay(start);
+        const finalStart = duration ? Math.min(start, duration) : start;
+        const finalEnd = duration ? Math.min(end, duration) : end;
+        setPointA(finalStart); 
+        setPointB(finalEnd);
+        setRangeInput(`${formatForInput(finalStart)}~${formatForInput(finalEnd)}`);
+        jumpToAndPlay(finalStart);
       }
     }
   };
@@ -555,6 +569,7 @@ export default function App() {
     // 極致壓縮網址策略
     const ytMatch = audioUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?]+)/);
     const vmMatch = audioUrl.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+    const dmMatch = audioUrl.match(/(?:dailymotion\.com\/video\/|dai\.ly\/)([^&?]+)/);
     
     if (ytMatch && ytMatch[1]) {
       // YouTube 只留 v=ID
@@ -562,6 +577,9 @@ export default function App() {
     } else if (vmMatch && vmMatch[1]) {
       // Vimeo 只留 vm=ID
       params.set('vm', vmMatch[1]);
+    } else if (dmMatch && dmMatch[1]) {
+      // Dailymotion 只留 dm=ID
+      params.set('dm', dmMatch[1]);
     } else {
       // 一般網址改用 'u' 參數，並且剝除可能多餘的 query 字串以節省長度
       try {
@@ -719,7 +737,7 @@ export default function App() {
                 <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 opacity-40" />
                 <input 
                   type="text" 
-                  placeholder="輸入音檔或 YouTube 連結..." 
+                  placeholder="輸入音檔、YouTube 等連結..." 
                   className="w-full pl-12 pr-4 py-4 outline-none focus:ring-2 transition-all border-none" 
                   style={{ backgroundColor: 'transparent', color: colors.headline }} 
                   value={audioUrl} 
