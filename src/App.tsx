@@ -113,215 +113,9 @@ export default function App() {
            audioUrl.includes('dai.ly') ||
            audioUrl.includes('twitch.tv') ||
            audioUrl.includes('facebook.com') ||
-           audioUrl.includes('.mp4');
+            audioUrl.includes('.mp4');
   }, [audioUrl]);
 
-  // --- 自製 Dailymotion API 支援 (不依賴 ReactPlayer 故障的外部 all.js) ---
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-
-  const isDailymotion = useMemo(() => {
-    if (!audioUrl) return false;
-    return audioUrl.includes('dailymotion.com') || audioUrl.includes('dai.ly');
-  }, [audioUrl]);
-
-  const dmVideoId = useMemo(() => {
-    if (!audioUrl) return null;
-    const match = audioUrl.match(/(?:dailymotion\.com\/video\/|dai\.ly\/)([^&?]+)/);
-    return match ? match[1] : null;
-  }, [audioUrl]);
-
-  const dmReadyCalledRef = useRef<string>('');
-
-  // 這樣在 iframeReady 物件載入有時間長度時，我們執行 ready 行為更新
-  useEffect(() => {
-    if (isDailymotion && duration > 0 && dmReadyCalledRef.current !== audioUrl) {
-      dmReadyCalledRef.current = audioUrl;
-      const searchParams = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.slice(1));
-      const aParam = searchParams.get('a') || hashParams.get('a');
-      if (aParam && playerRef.current) {
-        playerRef.current.seekTo(parseFloat(aParam), 'seconds');
-      }
-      setError('');
-      setSuccessMessage('影片載入成功！');
-      setTimeout(() => setSuccessMessage(''), 3000);
-    }
-  }, [isDailymotion, duration, audioUrl]);
-
-  // 兼顧強健性：通用 Dailymotion 指令發送器 (支援 JSON、Query String 與單一控制字串等多重標準，保障各版本相容性)
-  const postDMCommand = useCallback((command: string, args: any[] = []) => {
-    if (isDailymotion && iframeRef.current && iframeRef.current.contentWindow) {
-      const win = iframeRef.current.contentWindow;
-      
-      // 1. 發送最標準、高相容性的單一字串指令 (如 'play', 'pause', 'seek=10', 'volume=0.5')
-      try {
-        if (command === 'play') {
-          win.postMessage('play', '*');
-        } else if (command === 'pause') {
-          win.postMessage('pause', '*');
-        } else if (command === 'seek' && args.length > 0) {
-          win.postMessage(`seek=${args[0]}`, '*');
-        } else if (command === 'volume' && args.length > 0) {
-          win.postMessage(`volume=${args[0]}`, '*');
-        } else if (command === 'speed' && args.length > 0) {
-          win.postMessage(`speed=${args[0]}`, '*');
-          win.postMessage(`playbackRate=${args[0]}`, '*');
-        }
-      } catch (err) {}
-
-      // 2. 發送 JSON 文字指令 (支援多套內建 player-sdk 的解析規則)
-      try {
-        win.postMessage(JSON.stringify({ id: 'dmplayer', event: 'command', command, args }), '*');
-        win.postMessage(JSON.stringify({ command, args }), '*');
-        win.postMessage(JSON.stringify({ event: command, value: args[0] }), '*');
-      } catch (err) {}
-
-      // 3. 發送傳統 query-string 格式文字指令
-      try {
-        let val = '';
-        if (command === 'seek' && args.length > 0) val = `&value=${args[0]}`;
-        if (command === 'volume' && args.length > 0) val = `&value=${args[0]}`;
-        if (command === 'speed' && args.length > 0) val = `&value=${args[0]}`;
-        win.postMessage(`command=${command}${val}`, '*');
-      } catch (err) {}
-    }
-  }, [isDailymotion]);
-
-  // 同步播放/暫停狀態給 Dailymotion iframe
-  useEffect(() => {
-    if (isDailymotion) {
-      if (isPlaying) {
-        postDMCommand('play');
-      } else {
-        postDMCommand('pause');
-      }
-    }
-  }, [isPlaying, isDailymotion, postDMCommand]);
-
-  // 同步音量設定給 Dailymotion iframe
-  useEffect(() => {
-    if (isDailymotion) {
-      postDMCommand('volume', [volume]);
-    }
-  }, [volume, isDailymotion, postDMCommand]);
-
-  // 同步播放速度設定給 Dailymotion iframe
-  useEffect(() => {
-    if (isDailymotion) {
-      postDMCommand('speed', [playbackRate]);
-    }
-  }, [playbackRate, isDailymotion, postDMCommand]);
-
-  // 模擬 playerRef 供 Dailymotion 使用
-  if (isDailymotion) {
-    playerRef.current = {
-      seekTo: (seconds: number) => {
-        postDMCommand('seek', [seconds]);
-      },
-      getInternalPlayer: () => null
-    } as any;
-  }
-
-  useEffect(() => {
-    if (isDailymotion) {
-      playerRef.current = {
-        seekTo: (seconds: number) => {
-          postDMCommand('seek', [seconds]);
-        },
-        getInternalPlayer: () => null
-      } as any;
-    }
-  }, [isDailymotion, postDMCommand]);
-
-  // 監聽 Dailymotion postMessage 事件
-  useEffect(() => {
-    if (!isDailymotion || !dmVideoId) return;
-
-    setDuration(0);
-    setCurrentTime(0);
-
-    const handleMessage = (e: MessageEvent) => {
-      if (!e.data) return;
-
-      try {
-        let eventData: any = null;
-
-        if (typeof e.data === 'string') {
-          if (e.data.startsWith('{')) {
-            try {
-              const parsed = JSON.parse(e.data);
-              // 支援 Dailymotion 原生或其他規格物件屬性
-              eventData = {
-                event: parsed.event || parsed.type,
-                time: parsed.time !== undefined ? parsed.time : (parsed.currentTime !== undefined ? parsed.currentTime : undefined),
-                duration: parsed.duration
-              };
-            } catch (err) {
-              // 忽略
-            }
-          } else {
-            const params = new URLSearchParams(e.data);
-            const eventVal = params.get('event') || params.get('type') || params.get('id');
-            // 處理 time / duration
-            const timeVal = params.get('time') || params.get('currentTime') || params.get('seconds');
-            const durVal = params.get('duration');
-            if (eventVal || timeVal || durVal) {
-              eventData = {
-                event: eventVal,
-                time: timeVal ? parseFloat(timeVal) : undefined,
-                duration: durVal ? parseFloat(durVal) : undefined
-              };
-            }
-          }
-        } else if (typeof e.data === 'object' && e.data !== null) {
-          eventData = {
-            event: e.data.event || e.data.type || e.data.id,
-            time: e.data.time !== undefined ? e.data.time : (e.data.currentTime !== undefined ? e.data.currentTime : (e.data.seconds !== undefined ? e.data.seconds : undefined)),
-            duration: e.data.duration
-          };
-        }
-
-        if (eventData) {
-          const eventName = eventData.event;
-          
-          // 如果只要有 timeupdate 或 time 數值更新，一律同步 currentTime 為最準
-          if (eventData.time !== undefined) {
-            setCurrentTime(eventData.time);
-          }
-          
-          if (eventData.duration !== undefined) {
-            setDuration(eventData.duration);
-          }
-
-          if (eventName === 'play') {
-            setIsPlaying(true);
-          } else if (eventName === 'pause') {
-            setIsPlaying(false);
-          } else if (eventName === 'apiready' || eventName === 'ready' || eventName === 'canplay') {
-            const currentVol = stateRef.current.volume;
-            const currentSpeed = stateRef.current.playbackRate;
-            postDMCommand('volume', [currentVol]);
-            postDMCommand('speed', [currentSpeed]);
-          } else if (eventName === 'ended') {
-            if (isRepeatEnabled) {
-              const target = pointA !== null ? pointA : 0;
-              postDMCommand('seek', [target]);
-              postDMCommand('play');
-            } else {
-              setIsPlaying(false);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Error parsing message from Dailymotion iframe:", err);
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => {
-      window.removeEventListener('message', handleMessage);
-    };
-  }, [isDailymotion, dmVideoId, isRepeatEnabled, pointA, postDMCommand]);
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
   const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate });
@@ -978,87 +772,61 @@ export default function App() {
             {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
             <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
               <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
-                 {isDailymotion && dmVideoId ? (
-                   <iframe
-                     ref={iframeRef}
-                     id="dmplayer"
-                     name="dmplayer"
-                     src={`https://www.dailymotion.com/embed/video/${dmVideoId}?api=1&id=dmplayer&autoplay=1&mute=0`}
-                     width="100%"
-                     height="100%"
-                     allow="autoplay; picture-in-picture"
-                     allowFullScreen
-                     frameBorder="0"
-                     className="w-full h-full object-contain"
-                     onLoad={() => {
-                       setTimeout(() => {
-                         postDMCommand('volume', [volume]);
-                         postDMCommand('speed', [playbackRate]);
-                         if (isPlaying) {
-                           postDMCommand('play');
-                         } else {
-                           postDMCommand('pause');
-                         }
-                       }, 800);
-                     }}
-                   />
-                 ) : (
-                   <Player
-                     ref={(player) => {
-                       if (player) {
-                         playerRef.current = player;
-                       }
-                     }}
-                     url={audioUrl}
-                     playing={isPlaying}
-                     volume={volume}
-                     playbackRate={playbackRate}
-                     loop={isRepeatEnabled && pointA === null && pointB === null}
-                     onPlay={() => setIsPlaying(true)}
-                     onPause={() => setIsPlaying(false)}
-                     onEnded={() => {
-                       if (isRepeatEnabled) {
-                         if (pointA !== null) {
-                           jumpToAndPlay(pointA);
-                         } else {
-                           jumpToAndPlay(0);
-                         }
-                       } else {
-                         setIsPlaying(false);
-                       }
-                     }}
-                     onProgress={(state: any) => {
-                       setCurrentTime(state.playedSeconds);
-                     }}
-                     onDuration={(dur: number) => setDuration(dur)}
-                     onReady={() => {
-                       if (lastLoadedUrl.current === audioUrl) return;
-                       lastLoadedUrl.current = audioUrl;
-                       const searchParams = new URLSearchParams(window.location.search);
-                       const hashParams = new URLSearchParams(window.location.hash.slice(1));
-                       const aParam = searchParams.get('a') || hashParams.get('a');
-                       if (aParam && playerRef.current) {
-                         playerRef.current.seekTo(parseFloat(aParam), 'seconds');
-                       }
-                       setError('');
-                       setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
-                       setTimeout(() => setSuccessMessage(''), 3000);
-                     }}
-                     onError={() => {
-                       if (!audioUrl) return;
-                       setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
-                       setSuccessMessage('');
-                     }}
-                     width="100%"
-                     height="100%"
-                     playsinline={true}
-                     config={{
-                       file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
-                       youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
-                       vimeo: { playerOptions: { playsinline: true, autoplay: true } }
-                     } as any}
-                   />
-                 )}
+                  <Player
+                    ref={(player: any) => {
+                      if (player) {
+                        playerRef.current = player;
+                      }
+                    }}
+                    url={audioUrl}
+                    playing={isPlaying}
+                    volume={volume}
+                    playbackRate={playbackRate}
+                    loop={isRepeatEnabled && pointA === null && pointB === null}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onEnded={() => {
+                      if (isRepeatEnabled) {
+                        if (pointA !== null) {
+                          jumpToAndPlay(pointA);
+                        } else {
+                          jumpToAndPlay(0);
+                        }
+                      } else {
+                        setIsPlaying(false);
+                      }
+                    }}
+                    onProgress={(state: any) => {
+                      setCurrentTime(state.playedSeconds);
+                    }}
+                    onDuration={(dur: number) => setDuration(dur)}
+                    onReady={() => {
+                      if (lastLoadedUrl.current === audioUrl) return;
+                      lastLoadedUrl.current = audioUrl;
+                      const searchParams = new URLSearchParams(window.location.search);
+                      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                      const aParam = searchParams.get('a') || hashParams.get('a');
+                      if (aParam && playerRef.current) {
+                        playerRef.current.seekTo(parseFloat(aParam), 'seconds');
+                      }
+                      setError('');
+                      setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
+                      setTimeout(() => setSuccessMessage(''), 3000);
+                    }}
+                    onError={() => {
+                      if (!audioUrl) return;
+                      setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
+                      setSuccessMessage('');
+                    }}
+                    width="100%"
+                    height="100%"
+                    playsinline={true}
+                    config={{
+                      file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
+                      youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
+                      vimeo: { playerOptions: { playsinline: true, autoplay: true } }
+                    } as any}
+                  />
 
                  {/* Subtitle Overlay for Video Player */}
                  {isVideo && activeLine && (
