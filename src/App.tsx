@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, Share2, Minus, Plus } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
@@ -148,44 +148,90 @@ export default function App() {
     }
   }, [isDailymotion, duration, audioUrl]);
 
+  // 兼顧強健性：通用 Dailymotion 指令發送器 (支援 JSON、Query String 與單一控制字串等多重標準，保障各版本相容性)
+  const postDMCommand = useCallback((command: string, args: any[] = []) => {
+    if (isDailymotion && iframeRef.current && iframeRef.current.contentWindow) {
+      const win = iframeRef.current.contentWindow;
+      
+      // 1. 發送最標準、高相容性的單一字串指令 (如 'play', 'pause', 'seek=10', 'volume=0.5')
+      try {
+        if (command === 'play') {
+          win.postMessage('play', '*');
+        } else if (command === 'pause') {
+          win.postMessage('pause', '*');
+        } else if (command === 'seek' && args.length > 0) {
+          win.postMessage(`seek=${args[0]}`, '*');
+        } else if (command === 'volume' && args.length > 0) {
+          win.postMessage(`volume=${args[0]}`, '*');
+        } else if (command === 'speed' && args.length > 0) {
+          win.postMessage(`speed=${args[0]}`, '*');
+          win.postMessage(`playbackRate=${args[0]}`, '*');
+        }
+      } catch (err) {}
+
+      // 2. 發送 JSON 文字指令 (支援多套內建 player-sdk 的解析規則)
+      try {
+        win.postMessage(JSON.stringify({ id: 'dmplayer', event: 'command', command, args }), '*');
+        win.postMessage(JSON.stringify({ command, args }), '*');
+        win.postMessage(JSON.stringify({ event: command, value: args[0] }), '*');
+      } catch (err) {}
+
+      // 3. 發送傳統 query-string 格式文字指令
+      try {
+        let val = '';
+        if (command === 'seek' && args.length > 0) val = `&value=${args[0]}`;
+        if (command === 'volume' && args.length > 0) val = `&value=${args[0]}`;
+        if (command === 'speed' && args.length > 0) val = `&value=${args[0]}`;
+        win.postMessage(`command=${command}${val}`, '*');
+      } catch (err) {}
+    }
+  }, [isDailymotion]);
+
   // 同步播放/暫停狀態給 Dailymotion iframe
   useEffect(() => {
-    if (isDailymotion && iframeRef.current && iframeRef.current.contentWindow) {
+    if (isDailymotion) {
       if (isPlaying) {
-        iframeRef.current.contentWindow.postMessage(JSON.stringify({ command: 'play', args: [] }), '*');
+        postDMCommand('play');
       } else {
-        iframeRef.current.contentWindow.postMessage(JSON.stringify({ command: 'pause', args: [] }), '*');
+        postDMCommand('pause');
       }
     }
-  }, [isPlaying, isDailymotion]);
+  }, [isPlaying, isDailymotion, postDMCommand]);
 
   // 同步音量設定給 Dailymotion iframe
   useEffect(() => {
-    if (isDailymotion && iframeRef.current && iframeRef.current.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(JSON.stringify({ command: 'volume', args: [volume] }), '*');
+    if (isDailymotion) {
+      postDMCommand('volume', [volume]);
     }
-  }, [volume, isDailymotion]);
+  }, [volume, isDailymotion, postDMCommand]);
 
   // 同步播放速度設定給 Dailymotion iframe
   useEffect(() => {
-    if (isDailymotion && iframeRef.current && iframeRef.current.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(JSON.stringify({ command: 'speed', args: [playbackRate] }), '*');
+    if (isDailymotion) {
+      postDMCommand('speed', [playbackRate]);
     }
-  }, [playbackRate, isDailymotion]);
+  }, [playbackRate, isDailymotion, postDMCommand]);
 
   // 模擬 playerRef 供 Dailymotion 使用
+  if (isDailymotion) {
+    playerRef.current = {
+      seekTo: (seconds: number) => {
+        postDMCommand('seek', [seconds]);
+      },
+      getInternalPlayer: () => null
+    } as any;
+  }
+
   useEffect(() => {
     if (isDailymotion) {
       playerRef.current = {
         seekTo: (seconds: number) => {
-          if (iframeRef.current && iframeRef.current.contentWindow) {
-            iframeRef.current.contentWindow.postMessage(JSON.stringify({ command: 'seek', args: [seconds] }), '*');
-          }
+          postDMCommand('seek', [seconds]);
         },
         getInternalPlayer: () => null
-      };
+      } as any;
     }
-  }, [isDailymotion]);
+  }, [isDailymotion, postDMCommand]);
 
   // 監聽 Dailymotion postMessage 事件
   useEffect(() => {
@@ -203,40 +249,64 @@ export default function App() {
         if (typeof e.data === 'string') {
           if (e.data.startsWith('{')) {
             try {
-              eventData = JSON.parse(e.data);
+              const parsed = JSON.parse(e.data);
+              // 支援 Dailymotion 原生或其他規格物件屬性
+              eventData = {
+                event: parsed.event || parsed.type,
+                time: parsed.time !== undefined ? parsed.time : (parsed.currentTime !== undefined ? parsed.currentTime : undefined),
+                duration: parsed.duration
+              };
             } catch (err) {
               // 忽略
             }
-          } else if (e.data.includes('event=')) {
+          } else {
             const params = new URLSearchParams(e.data);
-            eventData = {
-              event: params.get('event'),
-              time: params.get('time') ? parseFloat(params.get('time')!) : undefined,
-              duration: params.get('duration') ? parseFloat(params.get('duration')!) : undefined
-            };
+            const eventVal = params.get('event') || params.get('type') || params.get('id');
+            // 處理 time / duration
+            const timeVal = params.get('time') || params.get('currentTime') || params.get('seconds');
+            const durVal = params.get('duration');
+            if (eventVal || timeVal || durVal) {
+              eventData = {
+                event: eventVal,
+                time: timeVal ? parseFloat(timeVal) : undefined,
+                duration: durVal ? parseFloat(durVal) : undefined
+              };
+            }
           }
         } else if (typeof e.data === 'object' && e.data !== null) {
-          eventData = e.data;
+          eventData = {
+            event: e.data.event || e.data.type || e.data.id,
+            time: e.data.time !== undefined ? e.data.time : (e.data.currentTime !== undefined ? e.data.currentTime : (e.data.seconds !== undefined ? e.data.seconds : undefined)),
+            duration: e.data.duration
+          };
         }
 
         if (eventData) {
           const eventName = eventData.event;
           
-          if (eventName === 'timeupdate' && eventData.time !== undefined) {
+          // 如果只要有 timeupdate 或 time 數值更新，一律同步 currentTime 為最準
+          if (eventData.time !== undefined) {
             setCurrentTime(eventData.time);
-          } else if ((eventName === 'durationchange' || eventName === 'duration') && eventData.duration !== undefined) {
+          }
+          
+          if (eventData.duration !== undefined) {
             setDuration(eventData.duration);
-          } else if (eventName === 'play') {
+          }
+
+          if (eventName === 'play') {
             setIsPlaying(true);
           } else if (eventName === 'pause') {
             setIsPlaying(false);
+          } else if (eventName === 'apiready' || eventName === 'ready' || eventName === 'canplay') {
+            const currentVol = stateRef.current.volume;
+            const currentSpeed = stateRef.current.playbackRate;
+            postDMCommand('volume', [currentVol]);
+            postDMCommand('speed', [currentSpeed]);
           } else if (eventName === 'ended') {
             if (isRepeatEnabled) {
               const target = pointA !== null ? pointA : 0;
-              if (iframeRef.current && iframeRef.current.contentWindow) {
-                iframeRef.current.contentWindow.postMessage(JSON.stringify({ command: 'seek', args: [target] }), '*');
-                iframeRef.current.contentWindow.postMessage(JSON.stringify({ command: 'play', args: [] }), '*');
-              }
+              postDMCommand('seek', [target]);
+              postDMCommand('play');
             } else {
               setIsPlaying(false);
             }
@@ -251,13 +321,13 @@ export default function App() {
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, [isDailymotion, dmVideoId, isRepeatEnabled, pointA]);
+  }, [isDailymotion, dmVideoId, isRepeatEnabled, pointA, postDMCommand]);
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
-  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume });
+  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate });
   useEffect(() => {
-    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume };
-  }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume]);
+    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate };
+  }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate]);
 
   const targetSeekRef = useRef<number | null>(null);
   const seekClearTimer = useRef<NodeJS.Timeout | null>(null);
@@ -911,17 +981,34 @@ export default function App() {
                  {isDailymotion && dmVideoId ? (
                    <iframe
                      ref={iframeRef}
-                     src={`https://www.dailymotion.com/embed/video/${dmVideoId}?api=postMessage&id=dmplayer&autoplay=1&mute=0`}
+                     id="dmplayer"
+                     name="dmplayer"
+                     src={`https://www.dailymotion.com/embed/video/${dmVideoId}?api=1&id=dmplayer&autoplay=1&mute=0`}
                      width="100%"
                      height="100%"
                      allow="autoplay; picture-in-picture"
                      allowFullScreen
                      frameBorder="0"
                      className="w-full h-full object-contain"
+                     onLoad={() => {
+                       setTimeout(() => {
+                         postDMCommand('volume', [volume]);
+                         postDMCommand('speed', [playbackRate]);
+                         if (isPlaying) {
+                           postDMCommand('play');
+                         } else {
+                           postDMCommand('pause');
+                         }
+                       }, 800);
+                     }}
                    />
                  ) : (
                    <Player
-                     ref={playerRef}
+                     ref={(player) => {
+                       if (player) {
+                         playerRef.current = player;
+                       }
+                     }}
                      url={audioUrl}
                      playing={isPlaying}
                      volume={volume}
