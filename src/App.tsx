@@ -9,6 +9,7 @@ import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
 
 import TranscriptPanel, { SubtitleLine } from './components/TranscriptPanel';
+import { DailymotionPlayer } from './DailymotionPlayer';
 
 export default function App() {
   // 配色方案常量 (根據附圖)
@@ -116,7 +117,16 @@ export default function App() {
             audioUrl.includes('.mp4');
   }, [audioUrl]);
 
+  const isDailymotion = useMemo(() => {
+    if (!audioUrl) return false;
+    return audioUrl.includes('dailymotion.com') || audioUrl.includes('dai.ly');
+  }, [audioUrl]);
 
+  const dmVideoId = useMemo(() => {
+    if (!audioUrl) return null;
+    const match = audioUrl.match(/(?:dailymotion\.com\/video\/|dai\.ly\/)([^&?]+)/);
+    return match ? match[1] : null;
+  }, [audioUrl]);
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
   const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate });
@@ -783,6 +793,36 @@ export default function App() {
             {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
             <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
               <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
+                    {isDailymotion && dmVideoId ? (
+                      <DailymotionPlayer
+                        videoId={dmVideoId}
+                        playing={isPlaying}
+                        volume={volume}
+                        playbackRate={playbackRate}
+                        onProgress={(state) => setCurrentTime(state.playedSeconds)}
+                        onDuration={(dur) => setDuration(dur)}
+                        onEnded={() => {
+                          if (isRepeatEnabled) {
+                            if (pointA !== null) jumpToAndPlay(pointA);
+                            else jumpToAndPlay(0);
+                          } else {
+                            setIsPlaying(false);
+                          }
+                        }}
+                        onReady={() => {
+                          if (lastLoadedUrl.current === audioUrl) return;
+                          lastLoadedUrl.current = audioUrl;
+                          const searchParams = new URLSearchParams(window.location.search);
+                          const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                          const aParam = searchParams.get('a') || hashParams.get('a');
+                          if (aParam && playerRef.current) playerRef.current.seekTo(parseFloat(aParam));
+                          setError('');
+                          setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
+                          setTimeout(() => setSuccessMessage(''), 3000);
+                        }}
+                        playerRef={playerRef}
+                      />
+                    ) : (
                     <Player
                       ref={(player: any) => {
                         if (player) {
@@ -838,6 +878,7 @@ export default function App() {
                         vimeo: { playerOptions: { playsinline: true, autoplay: true } }
                       } as any}
                     />
+                    )}
 
                  {/* Subtitle Overlay for Video Player */}
                  {isVideo && activeLine && (
