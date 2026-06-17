@@ -116,6 +116,168 @@ export default function App() {
             audioUrl.includes('.mp4');
   }, [audioUrl]);
 
+  // --- 自製 Dailymotion API 支援 ---
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  const isDailymotion = useMemo(() => {
+    if (!audioUrl) return false;
+    return audioUrl.includes('dailymotion.com') || audioUrl.includes('dai.ly');
+  }, [audioUrl]);
+
+  const dmVideoId = useMemo(() => {
+    if (!audioUrl) return null;
+    const match = audioUrl.match(/(?:dailymotion\.com\/video\/|dai\.ly\/)([^&?]+)/);
+    return match ? match[1] : null;
+  }, [audioUrl]);
+
+  const dmReadyCalledRef = useRef<string>('');
+
+  useEffect(() => {
+    if (isDailymotion && duration > 0 && dmReadyCalledRef.current !== audioUrl) {
+      dmReadyCalledRef.current = audioUrl;
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+      const aParam = searchParams.get('a') || hashParams.get('a');
+      if (aParam && playerRef.current) {
+        playerRef.current.seekTo(parseFloat(aParam), 'seconds');
+      }
+      setError('');
+      setSuccessMessage('影片載入成功！');
+      setTimeout(() => setSuccessMessage(''), 3000);
+    }
+  }, [isDailymotion, duration, audioUrl]);
+
+  const postDMCommand = useCallback((command: string, args: any[] = []) => {
+    if (isDailymotion && iframeRef.current && iframeRef.current.contentWindow) {
+      const win = iframeRef.current.contentWindow;
+      try {
+        if (command === 'play') {
+          win.postMessage('play', '*');
+        } else if (command === 'pause') {
+          win.postMessage('pause', '*');
+        } else if (command === 'seek' && args.length > 0) {
+          win.postMessage(`seek=${args[0]}`, '*');
+        } else if (command === 'volume' && args.length > 0) {
+          win.postMessage(`volume=${args[0]}`, '*');
+        } else if (command === 'speed' && args.length > 0) {
+          win.postMessage(`speed=${args[0]}`, '*');
+          win.postMessage(`playbackRate=${args[0]}`, '*');
+        }
+      } catch (err) {}
+
+      try {
+        win.postMessage(JSON.stringify({ command, args }), '*');
+        win.postMessage(JSON.stringify({ event: command, value: args[0] }), '*');
+      } catch (err) {}
+    }
+  }, [isDailymotion]);
+
+  useEffect(() => {
+    if (isDailymotion) {
+      if (isPlaying) {
+        postDMCommand('play');
+      } else {
+        postDMCommand('pause');
+      }
+    }
+  }, [isPlaying, isDailymotion, postDMCommand]);
+
+  useEffect(() => {
+    if (isDailymotion) {
+      postDMCommand('volume', [volume]);
+    }
+  }, [volume, isDailymotion, postDMCommand]);
+
+  useEffect(() => {
+    if (isDailymotion) {
+      postDMCommand('speed', [playbackRate]);
+    }
+  }, [playbackRate, isDailymotion, postDMCommand]);
+
+  useEffect(() => {
+    if (isDailymotion) {
+      playerRef.current = {
+        seekTo: (seconds: number) => {
+          postDMCommand('seek', [seconds]);
+        },
+        getInternalPlayer: () => null
+      } as any;
+    }
+  }, [isDailymotion, postDMCommand]);
+
+  useEffect(() => {
+    if (!isDailymotion || !dmVideoId) return;
+
+    setDuration(0);
+    setCurrentTime(0);
+
+    const handleMessage = (e: MessageEvent) => {
+      if (!e.origin.includes('dailymotion.com')) return;
+      if (!e.data) return;
+
+      let eventName = '';
+      let timeVal: number | null = null;
+      let durVal: number | null = null;
+
+      try {
+        if (typeof e.data === 'string') {
+          if (e.data.startsWith('{')) {
+            const parsed = JSON.parse(e.data);
+            eventName = parsed.event || parsed.type || '';
+            if (parsed.time !== undefined) timeVal = Number(parsed.time);
+            else if (parsed.currentTime !== undefined) timeVal = Number(parsed.currentTime);
+            if (parsed.duration !== undefined) durVal = Number(parsed.duration);
+          } else {
+            const params = new URLSearchParams(e.data);
+            eventName = params.get('event') || params.get('type') || '';
+            const t = params.get('time') || params.get('currentTime') || params.get('seconds');
+            if (t) timeVal = parseFloat(t);
+            const d = params.get('duration');
+            if (d) durVal = parseFloat(d);
+          }
+        } else if (typeof e.data === 'object' && e.data !== null) {
+          eventName = e.data.event || e.data.type || '';
+          if (e.data.time !== undefined) timeVal = Number(e.data.time);
+          else if (e.data.currentTime !== undefined) timeVal = Number(e.data.currentTime);
+          if (e.data.duration !== undefined) durVal = Number(e.data.duration);
+        }
+      } catch (err) {
+        // Ignored
+      }
+
+      if (timeVal !== null && !isNaN(timeVal)) {
+        setCurrentTime(timeVal);
+      }
+      if (durVal !== null && !isNaN(durVal)) {
+        setDuration(durVal);
+      }
+
+      if (eventName === 'play') {
+        setIsPlaying(true);
+      } else if (eventName === 'pause') {
+        setIsPlaying(false);
+      } else if (eventName === 'ended') {
+        if (isRepeatEnabled) {
+          const target = pointA !== null ? pointA : 0;
+          postDMCommand('seek', [target]);
+          postDMCommand('play');
+        } else {
+          setIsPlaying(false);
+        }
+      } else if (eventName === 'apiready' || eventName === 'ready' || eventName === 'canplay') {
+        const currentVol = stateRef.current.volume;
+        const currentSpeed = stateRef.current.playbackRate;
+        postDMCommand('volume', [currentVol]);
+        postDMCommand('speed', [currentSpeed]);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [isDailymotion, dmVideoId, isRepeatEnabled, pointA, postDMCommand]);
+
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
   const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate });
@@ -772,61 +934,87 @@ export default function App() {
             {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
             <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
               <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
-                  <Player
-                    ref={(player: any) => {
-                      if (player) {
-                        playerRef.current = player;
-                      }
-                    }}
-                    url={audioUrl}
-                    playing={isPlaying}
-                    volume={volume}
-                    playbackRate={playbackRate}
-                    loop={isRepeatEnabled && pointA === null && pointB === null}
-                    onPlay={() => setIsPlaying(true)}
-                    onPause={() => setIsPlaying(false)}
-                    onEnded={() => {
-                      if (isRepeatEnabled) {
-                        if (pointA !== null) {
-                          jumpToAndPlay(pointA);
-                        } else {
-                          jumpToAndPlay(0);
+                  {isDailymotion && dmVideoId ? (
+                    <iframe
+                      ref={iframeRef}
+                      id="dmplayer"
+                      name="dmplayer"
+                      src={`https://www.dailymotion.com/embed/video/${dmVideoId}?api=1&id=dmplayer&autoplay=1&mute=0`}
+                      width="100%"
+                      height="100%"
+                      allow="autoplay; picture-in-picture"
+                      allowFullScreen
+                      frameBorder="0"
+                      className="w-full h-full object-contain"
+                      onLoad={() => {
+                        setTimeout(() => {
+                          postDMCommand('volume', [volume]);
+                          postDMCommand('speed', [playbackRate]);
+                          if (isPlaying) {
+                            postDMCommand('play');
+                          } else {
+                            postDMCommand('pause');
+                          }
+                        }, 800);
+                      }}
+                    />
+                  ) : (
+                    <Player
+                      ref={(player: any) => {
+                        if (player) {
+                          playerRef.current = player;
                         }
-                      } else {
-                        setIsPlaying(false);
-                      }
-                    }}
-                    onProgress={(state: any) => {
-                      setCurrentTime(state.playedSeconds);
-                    }}
-                    onDuration={(dur: number) => setDuration(dur)}
-                    onReady={() => {
-                      if (lastLoadedUrl.current === audioUrl) return;
-                      lastLoadedUrl.current = audioUrl;
-                      const searchParams = new URLSearchParams(window.location.search);
-                      const hashParams = new URLSearchParams(window.location.hash.slice(1));
-                      const aParam = searchParams.get('a') || hashParams.get('a');
-                      if (aParam && playerRef.current) {
-                        playerRef.current.seekTo(parseFloat(aParam), 'seconds');
-                      }
-                      setError('');
-                      setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
-                      setTimeout(() => setSuccessMessage(''), 3000);
-                    }}
-                    onError={() => {
-                      if (!audioUrl) return;
-                      setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
-                      setSuccessMessage('');
-                    }}
-                    width="100%"
-                    height="100%"
-                    playsinline={true}
-                    config={{
-                      file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
-                      youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
-                      vimeo: { playerOptions: { playsinline: true, autoplay: true } }
-                    } as any}
-                  />
+                      }}
+                      url={audioUrl}
+                      playing={isPlaying}
+                      volume={volume}
+                      playbackRate={playbackRate}
+                      loop={isRepeatEnabled && pointA === null && pointB === null}
+                      onPlay={() => setIsPlaying(true)}
+                      onPause={() => setIsPlaying(false)}
+                      onEnded={() => {
+                        if (isRepeatEnabled) {
+                          if (pointA !== null) {
+                            jumpToAndPlay(pointA);
+                          } else {
+                            jumpToAndPlay(0);
+                          }
+                        } else {
+                          setIsPlaying(false);
+                        }
+                      }}
+                      onProgress={(state: any) => {
+                        setCurrentTime(state.playedSeconds);
+                      }}
+                      onDuration={(dur: number) => setDuration(dur)}
+                      onReady={() => {
+                        if (lastLoadedUrl.current === audioUrl) return;
+                        lastLoadedUrl.current = audioUrl;
+                        const searchParams = new URLSearchParams(window.location.search);
+                        const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                        const aParam = searchParams.get('a') || hashParams.get('a');
+                        if (aParam && playerRef.current) {
+                          playerRef.current.seekTo(parseFloat(aParam), 'seconds');
+                        }
+                        setError('');
+                        setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
+                        setTimeout(() => setSuccessMessage(''), 3000);
+                      }}
+                      onError={() => {
+                        if (!audioUrl) return;
+                        setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
+                        setSuccessMessage('');
+                      }}
+                      width="100%"
+                      height="100%"
+                      playsinline={true}
+                      config={{
+                        file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
+                        youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
+                        vimeo: { playerOptions: { playsinline: true, autoplay: true } }
+                      } as any}
+                    />
+                  )}
 
                  {/* Subtitle Overlay for Video Player */}
                  {isVideo && activeLine && (
