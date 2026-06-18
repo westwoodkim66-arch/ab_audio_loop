@@ -10,7 +10,6 @@ import LZString from 'lz-string';
 
 import TranscriptPanel, { SubtitleLine } from './components/TranscriptPanel';
 import { DailymotionPlayer } from './DailymotionPlayer';
-import WaveformPlot from './components/WaveformPlot';
 
 export default function App() {
   // 配色方案常量 (根據附圖)
@@ -1683,24 +1682,7 @@ export default function App() {
                 </div>
               </div>
 
-              {audioUrl && (
-                <WaveformPlot
-                  audioUrl={audioUrl}
-                  fileName={fileName}
-                  uploadedFile={uploadedFile}
-                  currentTime={currentTime}
-                  duration={duration}
-                  pointA={pointA}
-                  pointB={pointB}
-                  onSeek={(time) => {
-                    if (playerRef.current) {
-                      playerRef.current.seekTo(time, 'seconds');
-                    }
-                  }}
-                  onSetPointA={(time) => setPointA(time)}
-                  onSetPointB={(time) => setPointB(time)}
-                />
-              )}
+
 
               {/* 當前 A/B 循環區間對應的字幕名稱與建議 */}
               {pointA !== null && pointB !== null && (
