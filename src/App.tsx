@@ -4,12 +4,13 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, Share2, Minus, Plus } from 'lucide-react';
+import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
 
 import TranscriptPanel, { SubtitleLine } from './components/TranscriptPanel';
 import { DailymotionPlayer } from './DailymotionPlayer';
+import WaveformPlot from './components/WaveformPlot';
 
 export default function App() {
   // 配色方案常量 (根據附圖)
@@ -26,27 +27,153 @@ export default function App() {
     tertiary: '#2cb67d'
   };
 
-  const [audioUrl, setAudioUrl] = useState('');
-  const [isPlaying, setIsPlaying] = useState(false);
+  // 網址與本地儲存參數解析
+  const getSearchParams = () => {
+    if (typeof window === 'undefined') return { url: '', a: null, b: null, t: '' };
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    
+    let urlParam = searchParams.get('url') || hashParams.get('url') || searchParams.get('u') || hashParams.get('u');
+    const vParam = searchParams.get('v') || hashParams.get('v');
+    const vmParam = searchParams.get('vm') || hashParams.get('vm');
+    const dmParam = searchParams.get('dm') || hashParams.get('dm');
+    
+    if (vParam) {
+      urlParam = `https://www.youtube.com/watch?v=${vParam}`;
+    } else if (vmParam) {
+      urlParam = `https://vimeo.com/${vmParam}`;
+    } else if (dmParam) {
+      urlParam = `https://www.dailymotion.com/video/${dmParam}`;
+    }
+
+    const aParam = searchParams.get('a') || hashParams.get('a');
+    const bParam = searchParams.get('b') || hashParams.get('b');
+    const tParam = searchParams.get('t') || hashParams.get('t') || '';
+
+    return {
+      url: urlParam || '',
+      a: (aParam !== null && !isNaN(parseFloat(aParam))) ? parseFloat(aParam) : null,
+      b: (bParam !== null && !isNaN(parseFloat(bParam))) ? parseFloat(bParam) : null,
+      t: tParam
+    };
+  };
+
+  const initialData = useMemo(() => {
+    const params = getSearchParams();
+    
+    let finalUrl = params.url;
+    let finalFileName = '';
+    let finalPointA = params.a;
+    let finalPointB = params.b;
+    let autoPlay = !!params.url;
+
+    if (!finalUrl && typeof localStorage !== 'undefined') {
+      try {
+        const lastUrl = localStorage.getItem('ab_repeat_last_url');
+        const lastFileName = localStorage.getItem('ab_repeat_last_filename');
+        if (lastUrl) {
+          finalUrl = lastUrl;
+        } else if (lastFileName) {
+          finalFileName = lastFileName;
+        }
+
+        const mediaKey = lastUrl ? `url_${lastUrl}` : (lastFileName ? `local_file_${lastFileName}` : '');
+        if (mediaKey) {
+          const savedA = localStorage.getItem(`ab_repeat_pointA_${mediaKey}`);
+          const savedB = localStorage.getItem(`ab_repeat_pointB_${mediaKey}`);
+          
+          if (finalPointA === null && savedA !== null) {
+            finalPointA = parseFloat(savedA);
+          }
+          if (finalPointB === null && savedB !== null) {
+            finalPointB = parseFloat(savedB);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load initial states from localStorage', e);
+      }
+    } else if (finalUrl) {
+      try {
+        const mediaKey = `url_${finalUrl}`;
+        const savedA = localStorage.getItem(`ab_repeat_pointA_${mediaKey}`);
+        const savedB = localStorage.getItem(`ab_repeat_pointB_${mediaKey}`);
+        if (finalPointA === null && savedA !== null) {
+          finalPointA = parseFloat(savedA);
+        }
+        if (finalPointB === null && savedB !== null) {
+          finalPointB = parseFloat(savedB);
+        }
+      } catch (e) {}
+    }
+
+    return {
+      url: finalUrl,
+      fileName: finalFileName,
+      pointA: finalPointA,
+      pointB: finalPointB,
+      autoPlay
+    };
+  }, []);
+
+  const [audioUrl, setAudioUrl] = useState(initialData.url);
+  const [isPlaying, setIsPlaying] = useState(initialData.autoPlay);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
+  const [activeVolume, setActiveVolume] = useState(1);
+  const isFadingRef = useRef(false);
   const [playbackRate, setPlaybackRate] = useState(1.0);
-  const [pointA, setPointA] = useState<number | null>(null);
-  const [pointB, setPointB] = useState<number | null>(null);
+  const [pointA, setPointA] = useState<number | null>(initialData.pointA);
+  const [pointB, setPointB] = useState<number | null>(initialData.pointB);
   const [inputA, setInputA] = useState('');
   const [inputB, setInputB] = useState('');
   const [rangeInput, setRangeInput] = useState('');
   const [isRepeatEnabled, setIsRepeatEnabled] = useState(true);
+  const [isLoopFadeEnabled, setIsLoopFadeEnabled] = useState(true);
+
+  // Synchronize activeVolume with master volume state when not fading
+  useEffect(() => {
+    if (!isFadingRef.current) {
+      setActiveVolume(volume);
+    }
+  }, [volume]);
   const [error, setError] = useState('');
   const lastLoadedUrl = useRef('');
   const [draggingMarker, setDraggingMarker] = useState<string | null>(null);
-  const [fileName, setFileName] = useState('');
+  const [fileName, setFileName] = useState(initialData.fileName);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   
   // 新增 transcript state 讓 App 可存儲字串資料以便分享
   const [transcriptLines, setTranscriptLines] = useState<SubtitleLine[]>([]);
+
+  // 書籤功能資料結構
+  interface Bookmark {
+    id: string;
+    time: number;
+    label: string;
+  }
+
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
+    try {
+      const saved = localStorage.getItem('ab_repeat_bookmarks');
+      return saved ? JSON.parse(saved) : [];
+    } catch (err) {
+      return [];
+    }
+  });
+
+  const [newBookmarkLabel, setNewBookmarkLabel] = useState('');
+  const [bookmarkSearchQuery, setBookmarkSearchQuery] = useState('');
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ab_repeat_bookmarks', JSON.stringify(bookmarks));
+    } catch (err) {
+      console.warn('Failed to save bookmarks to localStorage', err);
+    }
+  }, [bookmarks]);
 
   const [previewTime, setPreviewTime] = useState<number | null>(null);
   const [isHoveringBar, setIsHoveringBar] = useState(false);
@@ -129,10 +256,10 @@ export default function App() {
   }, [audioUrl]);
 
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
-  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate });
+  const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate, activeLine });
   useEffect(() => {
-    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate };
-  }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate]);
+    stateRef.current = { pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate, activeLine };
+  }, [pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate, activeLine]);
 
   const targetSeekRef = useRef<number | null>(null);
   const seekClearTimer = useRef<NodeJS.Timeout | null>(null);
@@ -145,13 +272,34 @@ export default function App() {
       const isInput = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || (activeElement as HTMLElement).isContentEditable);
       if (isInput) return;
 
-      const { audioUrl: currentUrl, currentTime: currentPos, volume: currentVolume } = stateRef.current;
+      const { audioUrl: currentUrl, currentTime: currentPos, volume: currentVolume, activeLine, pointA, pointB } = stateRef.current;
 
       if (e.code === 'Space') {
         // 空白鍵：暫停/播放
         if (!currentUrl) return;
         e.preventDefault();
         setIsPlaying(prev => !prev);
+      } else if (e.code === 'KeyA' || e.key === 'a' || e.key === 'A') {
+        if (!currentUrl) return;
+        e.preventDefault();
+        const targetA = (activeLine && activeLine.startTime !== undefined && activeLine.startTime !== -1) 
+          ? activeLine.startTime 
+          : currentPos;
+        setPointA(targetA);
+        jumpToAndPlay(targetA);
+      } else if (e.code === 'KeyB' || e.key === 'b' || e.key === 'B') {
+        if (!currentUrl) return;
+        e.preventDefault();
+        const targetB = (activeLine && activeLine.endTime !== undefined && activeLine.endTime !== -1) 
+          ? activeLine.endTime 
+          : currentPos;
+        if (pointA !== null && targetB <= pointA) {
+          setError('點 B 必須在點 A 之後');
+          setTimeout(() => setError(''), 3000);
+          return;
+        }
+        setPointB(targetB);
+        jumpToAndPlay(Math.max(0, targetB - 5));
       } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
         // 左/右鍵：倒退或快轉 5 秒
         e.preventDefault();
@@ -188,37 +336,54 @@ export default function App() {
   const holdTimer = useRef<NodeJS.Timeout | null>(null);
   const holdInterval = useRef<NodeJS.Timeout | null>(null);
 
-  // 初始化：檢查網址參數是否有分享進來的設定
+  // 取得 localStorage 的 media 專屬 key
+  const getStorageKeyBase = useCallback((url: string, name: string) => {
+    if (!url) return '';
+    if (url.startsWith('blob:')) {
+      return name ? `local_file_${name}` : '';
+    }
+    return `url_${url}`;
+  }, []);
+
+  // 當 A 點, B 點或媒體改變時，自動儲存至 localStorage
+  useEffect(() => {
+    if (!audioUrl) return;
+    const mediaKey = getStorageKeyBase(audioUrl, fileName);
+    if (!mediaKey) return;
+
+    try {
+      if (pointA !== null) {
+        localStorage.setItem(`ab_repeat_pointA_${mediaKey}`, pointA.toString());
+      } else {
+        localStorage.removeItem(`ab_repeat_pointA_${mediaKey}`);
+      }
+
+      if (pointB !== null) {
+        localStorage.setItem(`ab_repeat_pointB_${mediaKey}`, pointB.toString());
+      } else {
+        localStorage.removeItem(`ab_repeat_pointB_${mediaKey}`);
+      }
+
+      // 紀錄最後練習的媒體與檔案資訊，方便重載時自動恢復
+      localStorage.setItem('ab_repeat_last_media_key', mediaKey);
+      if (!audioUrl.startsWith('blob:')) {
+        localStorage.setItem('ab_repeat_last_url', audioUrl);
+        localStorage.removeItem('ab_repeat_last_filename');
+      } else {
+        localStorage.removeItem('ab_repeat_last_url');
+        localStorage.setItem('ab_repeat_last_filename', fileName);
+      }
+    } catch (e) {
+      console.warn('Failed to save state to localStorage:', e);
+    }
+  }, [audioUrl, fileName, pointA, pointB, getStorageKeyBase]);
+
+  // 初始化：網頁載入時僅讀取需要額外解壓或載入的分享參數（如字幕 tParam）
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
-    
-    // 支援原本的 url 參數，和更短的 u 參數
-    let urlParam = searchParams.get('url') || hashParams.get('url') || searchParams.get('u') || hashParams.get('u');
-    
-    // 獨立平台極致縮短支援
-    const vParam = searchParams.get('v') || hashParams.get('v');     // YouTube
-    const vmParam = searchParams.get('vm') || hashParams.get('vm');  // Vimeo
-    const dmParam = searchParams.get('dm') || hashParams.get('dm');  // Dailymotion
-    
-    if (vParam) {
-      urlParam = `https://www.youtube.com/watch?v=${vParam}`;
-    } else if (vmParam) {
-      urlParam = `https://vimeo.com/${vmParam}`;
-    } else if (dmParam) {
-      urlParam = `https://www.dailymotion.com/video/${dmParam}`;
-    }
-
-    const aParam = searchParams.get('a') || hashParams.get('a');
-    const bParam = searchParams.get('b') || hashParams.get('b');
     const tParam = searchParams.get('t') || hashParams.get('t');
 
-    if (urlParam) {
-      setAudioUrl(urlParam);
-      setIsPlaying(true); // 分享連結進來後嘗試自動播放
-    }
-    if (aParam !== null && !isNaN(parseFloat(aParam))) setPointA(parseFloat(aParam));
-    if (bParam !== null && !isNaN(parseFloat(bParam))) setPointB(parseFloat(bParam));
     if (tParam) {
       try {
         const decompressed = LZString.decompressFromEncodedURIComponent(tParam);
@@ -263,16 +428,131 @@ export default function App() {
     };
   }, [audioUrl]);
 
-  const handleFile = (file: File) => {
-    if (file) {
+  const parseVttTimeForImport = (timeStr: string) => {
+    if (!timeStr) return -1;
+    const parts = timeStr.trim().replace(',', '.').split(':');
+    let secs = 0;
+    if (parts.length === 3) {
+      secs += parseFloat(parts[0]) * 3600;
+      secs += parseFloat(parts[1]) * 60;
+      secs += parseFloat(parts[2]);
+    } else if (parts.length === 2) {
+      secs += parseFloat(parts[0]) * 60;
+      secs += parseFloat(parts[1]);
+    }
+    return secs;
+  };
+
+  const generateWordsForLine = (text: string) => {
+    const hasCJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]/.test(text);
+    if (hasCJK) {
+      return text.split('').map(char => ({
+        word: char,
+        furigana: '',
+        romaji: '',
+        pos: 'misc'
+      }));
+    } else {
+      return text.split(/(\s+)/).filter(p => p.length > 0).map(part => {
+        if (/\s+/.test(part)) {
+          return {
+            word: part,
+            furigana: '',
+            romaji: '',
+            pos: 'punctuation'
+          };
+        }
+        return {
+          word: part,
+          furigana: '',
+          romaji: '',
+          pos: 'misc'
+        };
+      });
+    }
+  };
+
+  const handleFile = async (file: File) => {
+    if (!file) return;
+
+    const isSubtitle = /\.(srt|vtt)$/i.test(file.name);
+    if (isSubtitle) {
+      try {
+        const text = await file.text();
+        const loadedLines: SubtitleLine[] = [];
+        const isVtt = file.name.toLowerCase().endsWith('.vtt');
+        // Normalize different line ending styles to match blocks split
+        const blocks = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split(/\n\n+/);
+
+        for (const block of blocks) {
+          const linesSplit = block.split('\n').map(l => l.trim()).filter(l => l !== '');
+          if (linesSplit.length === 0) continue;
+          if (isVtt && linesSplit[0] === 'WEBVTT') continue;
+
+          const timecodeLine = linesSplit.find(l => l.includes('-->'));
+          if (!timecodeLine) continue;
+
+          const timecodes = timecodeLine.split('-->').map(s => s.trim());
+          const startTime = parseVttTimeForImport(timecodes[0]);
+          const endTime = parseVttTimeForImport(timecodes[1]);
+          const textIndex = linesSplit.indexOf(timecodeLine) + 1;
+          
+          const linesContent = linesSplit.slice(textIndex);
+          let originalText = '';
+          let translation = '';
+          
+          if (linesContent.length >= 2) {
+            const line0 = linesContent[0].replace(/<[^>]+>/g, '').trim();
+            const line1 = linesContent[1].replace(/<[^>]+>/g, '').trim();
+            const line1HasCJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(line1);
+            const line0HasCJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(line0);
+            
+            if (line1HasCJK && !line0HasCJK) {
+              originalText = line0;
+              translation = line1;
+            } else {
+              originalText = linesContent.join('\n').replace(/<[^>]+>/g, '').trim();
+            }
+          } else if (linesContent.length === 1) {
+            originalText = linesContent[0].replace(/<[^>]+>/g, '').trim();
+          }
+
+          if (originalText) {
+            loadedLines.push({
+              id: `sub_import_${Date.now()}_${loadedLines.length}`,
+              startTime: startTime >= 0 ? startTime : null,
+              endTime: endTime >= 0 ? endTime : null,
+              originalText,
+              translation,
+              words: generateWordsForLine(originalText)
+            });
+          }
+        }
+
+        if (loadedLines.length > 0) {
+          setTranscriptLines(loadedLines);
+          setSuccessMessage(`成功匯入 ${loadedLines.length} 句自訂字幕！`);
+          setTimeout(() => setSuccessMessage(''), 3000);
+          setError('');
+        } else {
+          setError('未能成功解析字幕內容，請確保檔案格式正確 (.srt / .vtt)。');
+          setTimeout(() => setError(''), 4000);
+        }
+      } catch (err: any) {
+        console.error(err);
+        setError(`匯入失敗: ${err.message || '未知錯誤'}`);
+        setTimeout(() => setError(''), 4000);
+      }
+    } else {
       const isValidAudio = file.type.startsWith('audio/') || /\.(m4a|aac|mp3|wav|ogg|flac)$/i.test(file.name);
       if (!isValidAudio) {
-        setError('請上傳有效的音檔格式 (支援 MP3, WAV, M4A, AAC 等)');
+        setError('請上傳有效的音檔或字幕格式 (支援 MP3, WAV, M4A, AAC, SRT, VTT)');
         return;
       }
       const url = URL.createObjectURL(file);
       setAudioUrl(url);
       setFileName(file.name);
+      setUploadedFile(file);
       setError('');
       setSuccessMessage('音檔上傳成功！');
       setTimeout(() => setSuccessMessage(''), 3000);
@@ -301,6 +581,33 @@ export default function App() {
     if (targetTime !== null && playerRef.current) {
       playerRef.current.seekTo(targetTime, 'seconds');
       setIsPlaying(true);
+    }
+  };
+
+  const addBookmark = () => {
+    if (!audioUrl) {
+      setError('請先載入音檔，再新增書籤');
+      setTimeout(() => setError(''), 3000);
+      return;
+    }
+    const labelText = newBookmarkLabel.trim() || `書籤 @ ${formatTime(currentTime)}`;
+    const newB: Bookmark = {
+      id: Math.random().toString(36).slice(2, 9),
+      time: Math.round(currentTime * 10) / 10,
+      label: labelText
+    };
+    setBookmarks(prev => [...prev, newB].sort((a, b) => a.time - b.time));
+    setNewBookmarkLabel('');
+    setSuccessMessage(`書籤「${labelText}」已儲存於 ${formatTime(currentTime)}！`);
+    setTimeout(() => setSuccessMessage(''), 3000);
+  };
+
+  const deleteBookmark = (id: string) => {
+    const deleted = bookmarks.find(b => b.id === id);
+    setBookmarks(prev => prev.filter(b => b.id !== id));
+    if (deleted) {
+      setSuccessMessage(`已刪除書籤「${deleted.label}」`);
+      setTimeout(() => setSuccessMessage(''), 2000);
     }
   };
 
@@ -341,10 +648,53 @@ export default function App() {
   }, [draggingMarker, duration, pointA, pointB, isRepeatEnabled]);
 
   useEffect(() => {
-    if (isRepeatEnabled && pointB !== null && currentTime >= pointB) {
-      jumpToAndPlay(pointA !== null ? pointA : 0);
+    if (!isRepeatEnabled || pointB === null || isFadingRef.current) return;
+
+    const startPoint = pointA !== null ? pointA : 0;
+    const endPoint = pointB;
+
+    if (currentTime >= endPoint) {
+      if (isLoopFadeEnabled && (endPoint - startPoint >= 1.0) && volume > 0) {
+        // Trigger smooth fade out
+        isFadingRef.current = true;
+        const fadeSteps = 10;
+        const fadeInterval = 15; // 15ms * 10 steps = 150ms total fade duration
+        let currentStep = 0;
+        const initialVol = volume;
+
+        const intervalId = setInterval(() => {
+          currentStep++;
+          const targetVol = initialVol * (1 - currentStep / fadeSteps);
+          setActiveVolume(targetVol);
+
+          if (currentStep >= fadeSteps) {
+            clearInterval(intervalId);
+            // Once volume is completely faded out, perform precise jump to A
+            jumpToAndPlay(startPoint);
+            
+            // Wait slightly for the seek/jump to register, then restore volume smoothly
+            setTimeout(() => {
+              let restoreStep = 0;
+              const restoreIntervalId = setInterval(() => {
+                restoreStep++;
+                const restoredVol = initialVol * (restoreStep / fadeSteps);
+                setActiveVolume(restoredVol);
+
+                if (restoreStep >= fadeSteps) {
+                  clearInterval(restoreIntervalId);
+                  setActiveVolume(initialVol);
+                  isFadingRef.current = false;
+                }
+              }, 15);
+            }, 30);
+          }
+        }, fadeInterval);
+      } else {
+        // No fade-out, precise direct jump
+        jumpToAndPlay(startPoint);
+      }
     }
-  }, [currentTime, pointA, pointB, isRepeatEnabled]);
+  }, [currentTime, pointA, pointB, isRepeatEnabled, isLoopFadeEnabled, volume]);
 
   const togglePlay = () => {
     if (!audioUrl) return;
@@ -568,6 +918,8 @@ export default function App() {
     setRangeInput('');
   };
 
+
+
   const Player = ReactPlayer as any;
 
   const skip = (amount: number) => {
@@ -702,6 +1054,11 @@ export default function App() {
     }
   };
 
+  const filteredBookmarks = bookmarks.filter(b => 
+    b.label.toLowerCase().includes(bookmarkSearchQuery.toLowerCase()) ||
+    formatTime(b.time).includes(bookmarkSearchQuery)
+  );
+
   return (
     <div className="min-h-screen flex flex-col items-center py-12 px-4 font-sans relative" style={{ backgroundColor: colors.background, color: colors.paragraph }}>
       
@@ -711,6 +1068,40 @@ export default function App() {
           {successMessage}
         </div>
       )}
+
+      {/* Keyboard Shortcut Hints Bar */}
+      <div className="max-w-4xl w-full mb-6 p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs font-medium" style={{ borderColor: colors.stroke, backgroundColor: 'rgba(255, 255, 255, 0.01)' }}>
+        <div className="flex items-center gap-2" style={{ color: colors.headline }}>
+          <Keyboard className="w-4 h-4 text-[#7f5af0]" />
+          <span>鍵盤快捷鍵指南</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold" style={{ backgroundColor: '#242629', borderColor: colors.stroke, color: colors.headline }}>Space</kbd>
+            <span className="text-[11px]">{isPlaying ? '暫停' : '播放'}</span>
+          </div>
+          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold" style={{ backgroundColor: '#242629', borderColor: colors.stroke, color: colors.headline }}>A</kbd>
+            <span className="text-[11px]">設 A 點</span>
+          </div>
+          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold" style={{ backgroundColor: '#242629', borderColor: colors.stroke, color: colors.headline }}>B</kbd>
+            <span className="text-[11px]">設 B 點</span>
+          </div>
+          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">←</kbd>
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">→</kbd>
+            <span className="text-[11px]">微調 5 秒</span>
+          </div>
+          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">Shift</kbd>
+            <span className="text-[11px] opacity-40">+</span>
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">←</kbd>
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">→</kbd>
+            <span className="text-[11px]">微調 1 秒</span>
+          </div>
+        </div>
+      </div>
 
       <div className="max-w-4xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
         
@@ -737,15 +1128,40 @@ export default function App() {
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload className="w-10 h-10 mb-3 opacity-60 transition-transform group-hover:-translate-y-1" style={{ color: isDragging ? colors.button : colors.paragraph }} />
-              <p className="font-bold mb-1" style={{ color: colors.headline }}>點擊或拖曳音檔至此處</p>
-              <p className="text-xs opacity-60 mb-3" style={{ color: colors.paragraph }}>支援 MP3, WAV, M4A, AAC 等格式</p>
-              {fileName && (
-                <div className="flex items-center gap-2 px-3 py-1.5 border mt-2" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
-                  <FileAudio className="w-4 h-4" style={{ color: colors.button }} />
-                  <span className="text-sm font-mono truncate max-w-[200px] md:max-w-[300px]" style={{ color: colors.headline }}>{fileName}</span>
-                </div>
-              )}
-              <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.m4a,.aac" onChange={(e) => { if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]); }} />
+              <p className="font-bold mb-1" style={{ color: colors.headline }}>點擊或拖曳音檔/字幕 (.srt, .vtt) 至此處</p>
+              <p className="text-xs opacity-60 mb-3" style={{ color: colors.paragraph }}>支援音檔 (MP3, WAV, M4A, AAC) 與自訂字幕檔 (SRT, VTT)</p>
+              
+              {/* Flex layout container for loaded assets */}
+              <div className="flex flex-col md:flex-row gap-3 mt-2" onClick={(e) => e.stopPropagation()}>
+                {fileName && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 border" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
+                    <FileAudio className="w-4 h-4" style={{ color: colors.button }} />
+                    <span className="text-sm font-mono truncate max-w-[200px] md:max-w-[300px]" style={{ color: colors.headline }}>{fileName}</span>
+                  </div>
+                )}
+                {transcriptLines.length > 0 && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 border relative group/sub" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
+                    <FileText className="w-4 h-4 text-[#7f5af0]" />
+                    <span className="text-sm font-mono" style={{ color: colors.headline }}>
+                      已匯入自訂字幕 ({transcriptLines.length} 句)
+                    </span>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTranscriptLines([]);
+                        setSuccessMessage('字幕已清除！');
+                        setTimeout(() => setSuccessMessage(''), 2500);
+                      }}
+                      className="text-[10px] ml-1 px-1.5 py-0.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
+                      title="清除字幕"
+                    >
+                      清除
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.m4a,.aac,.srt,.vtt" onChange={(e) => { if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]); }} />
             </div>
 
             <div className="flex items-center gap-4 my-2">
@@ -766,6 +1182,7 @@ export default function App() {
                   onChange={(e) => { 
                     setAudioUrl(e.target.value); 
                     setFileName(''); 
+                    setUploadedFile(null);
                     setError(''); // 清除錯誤
                   }} 
                 />
@@ -785,6 +1202,7 @@ export default function App() {
               </button>
             </div>
             {error && <div className="mt-1 text-red-400 text-sm flex items-center gap-2 px-2"><Info className="w-4 h-4 flex-shrink-0" /> {error}</div>}
+
           </div>
         </div>
 
@@ -793,40 +1211,40 @@ export default function App() {
             {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
             <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
               <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
-                   {isDailymotion && dmVideoId ? (
-  <DailymotionPlayer
-    videoId={dmVideoId}
-    playing={isPlaying}
-    volume={volume}
-    playbackRate={playbackRate}
-    onProgress={(state) => {
-      setCurrentTime(state.playedSeconds);
-    }}
-    onDuration={(dur) => setDuration(dur)}
-    onEnded={() => {
-      if (isRepeatEnabled) {
-        if (pointA !== null) jumpToAndPlay(pointA);
-        else jumpToAndPlay(0);
-      } else {
-        setIsPlaying(false);
-      }
-    }}
-    onReady={() => {
-      if (lastLoadedUrl.current === audioUrl) return;
-      lastLoadedUrl.current = audioUrl;
-      const searchParams = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.slice(1));
-      const aParam = searchParams.get('a') || hashParams.get('a');
-      if (aParam && playerRef.current) {
-        setTimeout(() => playerRef.current.seekTo(parseFloat(aParam), 'seconds'), 500);
-      }
-      setError('');
-      setSuccessMessage('影片載入成功！');
-      setTimeout(() => setSuccessMessage(''), 3000);
-    }}
-    playerRef={playerRef}
-  />
-) : (
+                    {isDailymotion && dmVideoId ? (
+                      <DailymotionPlayer
+                        videoId={dmVideoId}
+                        playing={isPlaying}
+                        volume={activeVolume}
+                        playbackRate={playbackRate}
+                        onProgress={(state) => {
+                          setCurrentTime(state.playedSeconds);
+                        }}
+                        onDuration={(dur) => setDuration(dur)}
+                        onEnded={() => {
+                          if (isRepeatEnabled) {
+                            if (pointA !== null) jumpToAndPlay(pointA);
+                            else jumpToAndPlay(0);
+                          } else {
+                            setIsPlaying(false);
+                          }
+                        }}
+                        onReady={() => {
+                          if (lastLoadedUrl.current === audioUrl) return;
+                          lastLoadedUrl.current = audioUrl;
+                          const searchParams = new URLSearchParams(window.location.search);
+                          const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                          const aParam = searchParams.get('a') || hashParams.get('a');
+                          if (aParam && playerRef.current) {
+                            setTimeout(() => playerRef.current.seekTo(parseFloat(aParam), 'seconds'), 500);
+                          }
+                          setError('');
+                          setSuccessMessage('影片載入成功！');
+                          setTimeout(() => setSuccessMessage(''), 3000);
+                        }}
+                        playerRef={playerRef}
+                      />
+                    ) : (
                     <Player
                       ref={(player: any) => {
                         if (player) {
@@ -835,7 +1253,7 @@ export default function App() {
                       }}
                       url={audioUrl}
                       playing={isPlaying}
-                      volume={volume}
+                      volume={activeVolume}
                       playbackRate={playbackRate}
                       loop={isRepeatEnabled && pointA === null && pointB === null}
                       onPlay={() => setIsPlaying(true)}
@@ -951,6 +1369,31 @@ export default function App() {
                         <div className="absolute top-0 h-full opacity-40" style={{ left: `${(pointA / duration) * 100}%`, width: `${((pointB - pointA) / duration) * 100}%`, backgroundColor: colors.tertiary }} />
                       )}
                     </div>
+
+                    {/* Hover Timestamp Tooltip */}
+                    {previewTime !== null && duration > 0 && (
+                      <div 
+                        className="absolute -top-10 -translate-x-1/2 pointer-events-none z-40 transition-all duration-75"
+                        style={{ left: `${(previewTime / duration) * 100}%` }}
+                      >
+                        <div className="px-2 py-0.5 rounded text-[10px] font-mono font-bold shadow-lg border whitespace-nowrap flex flex-col items-center relative"
+                          style={{ 
+                            backgroundColor: colors.background, 
+                            color: colors.headline, 
+                            borderColor: colors.button 
+                          }}
+                        >
+                          {formatTime(previewTime)}
+                          {/* Triangle arrow pointing down */}
+                          <div className="w-1.5 h-1.5 border-r border-b rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2" 
+                            style={{ 
+                              backgroundColor: colors.background, 
+                              borderColor: colors.button 
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
                     {/* A/B Markers */}
                     {pointA !== null && (
                       <div 
@@ -998,6 +1441,25 @@ export default function App() {
                 </div>
               </div>
 
+              {audioUrl && (
+                <WaveformPlot
+                  audioUrl={audioUrl}
+                  fileName={fileName}
+                  uploadedFile={uploadedFile}
+                  currentTime={currentTime}
+                  duration={duration}
+                  pointA={pointA}
+                  pointB={pointB}
+                  onSeek={(time) => {
+                    if (playerRef.current) {
+                      playerRef.current.seekTo(time, 'seconds');
+                    }
+                  }}
+                  onSetPointA={(time) => setPointA(time)}
+                  onSetPointB={(time) => setPointB(time)}
+                />
+              )}
+
               {/* Bottom Row: A/B Controls (Compact) */}
               <div className="flex flex-wrap items-center justify-between gap-3 bg-white/5 rounded-lg px-3 py-3 md:py-2 border border-white/5">
                 
@@ -1040,6 +1502,11 @@ export default function App() {
                     <span className={`text-sm sm:text-xs font-bold ${isRepeatEnabled ? 'text-white' : 'opacity-50'}`}>循環</span>
                   </label>
 
+                  <label className="flex items-center gap-1.5 cursor-pointer" title="自動循環增強：超出 B 點時極短淡出再跳回 A 點，聽力練習流暢不刺耳">
+                    <input type="checkbox" checked={isLoopFadeEnabled} onChange={(e) => setIsLoopFadeEnabled(e.target.checked)} className="w-4 h-4 sm:w-3 sm:h-3 accent-[#7f5af0]" />
+                    <span className={`text-sm sm:text-xs font-bold ${isLoopFadeEnabled ? 'text-white' : 'opacity-50'}`}>淡出循環</span>
+                  </label>
+
                   <div className="flex items-center justify-end gap-1.5 sm:border-l sm:border-white/10 sm:pl-3 ml-auto sm:ml-0">
                     <button onClick={clearAB} title="清除標記" className="p-2 sm:p-1.5 hover:bg-white/10 rounded transition-colors text-red-400 group flex items-center justify-center bg-black/20 sm:bg-transparent"><Trash2 className="w-4 h-4 opacity-70 group-hover:opacity-100" /></button>
                     <button onClick={handleShare} title="產生分享連結" className="p-2 sm:p-1.5 hover:bg-white/10 rounded transition-colors group flex items-center justify-center bg-black/20 sm:bg-transparent"><Share2 className="w-4 h-4 opacity-70 group-hover:opacity-100" /></button>
@@ -1048,6 +1515,142 @@ export default function App() {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* 書籤紀錄與重點標記 */}
+        <div className="mx-8 md:mx-12 mb-8 p-6 rounded-2xl border border-white/5 bg-white/[0.02]" style={{ borderColor: colors.stroke }}>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 border-b border-white/5 pb-4">
+            <div className="flex items-center gap-2.5">
+              <span className="p-2 rounded-lg bg-[#7f5af0]/10 text-[#7f5af0] flex items-center justify-center">
+                <BookmarkIcon className="w-5 h-5 animate-pulse" />
+              </span>
+              <div>
+                <h3 className="font-bold text-base" style={{ color: colors.headline }}>
+                  書籤紀錄與重點標記
+                </h3>
+                <p className="text-xs opacity-60">儲存特定時間點與備忘標籤，隨時一鍵精確跳轉聽力練習</p>
+              </div>
+            </div>
+
+            {/* 搜尋過濾 */}
+            <div className="relative w-full md:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-40" />
+              <input 
+                type="text" 
+                placeholder="搜尋書籤或時間..." 
+                className="w-full pl-9 pr-4 py-1.5 text-xs bg-black/40 border border-white/10 rounded-lg outline-none focus:border-[#7f5af0]/50 transition-colors"
+                style={{ color: colors.headline }}
+                value={bookmarkSearchQuery}
+                onChange={(e) => setBookmarkSearchQuery(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* 新增書籤控制列 */}
+          <div className="flex flex-col sm:flex-row gap-2 mb-4">
+            <div className="relative flex-grow">
+              <Tag className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-40" />
+              <input 
+                type="text" 
+                placeholder={`書籤說明（選填，預設：書籤 @ ${formatTime(currentTime)}）`}
+                className="w-full pl-9 pr-4 py-2 text-xs bg-black/40 border border-white/10 rounded-lg outline-none focus:border-[#7f5af0]/50 transition-colors"
+                style={{ color: colors.headline }}
+                value={newBookmarkLabel}
+                onChange={(e) => setNewBookmarkLabel(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addBookmark()}
+              />
+            </div>
+            <button 
+              onClick={addBookmark}
+              className="flex-shrink-0 px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 text-white active:scale-95 shadow-md hover:opacity-90"
+              style={{ backgroundColor: colors.button }}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              新增當前時間 ({formatTime(currentTime)})
+            </button>
+          </div>
+
+          {/* 書籤列表 */}
+          {bookmarks.length === 0 ? (
+            <div className="py-6 text-center rounded-xl border border-dashed border-white/5 text-xs opacity-50 flex flex-col items-center gap-1">
+              <BookmarkIcon className="w-6 h-6 opacity-30 mb-1" />
+              <span>尚未建立任何書籤。</span>
+              <span>您可以在上方文字框輸入備忘描述，然後點擊「新增當前時間」按鈕。</span>
+            </div>
+          ) : filteredBookmarks.length === 0 ? (
+            <div className="py-6 text-center text-xs opacity-50">
+              找不到符合「{bookmarkSearchQuery}」的書籤。
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+              {filteredBookmarks.map((bookmark) => {
+                const isCurrentActive = Math.abs(currentTime - bookmark.time) < 0.5;
+                return (
+                  <div 
+                    key={bookmark.id}
+                    className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/5 bg-black/20 hover:bg-white/[0.03] transition-colors group/item"
+                    style={{ borderColor: isCurrentActive ? `${colors.button}40` : undefined }}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-grow">
+                      {/* 時間點按鈕 */}
+                      <button 
+                        onClick={() => jumpToAndPlay(bookmark.time)}
+                        title="跳轉到此時間並播放"
+                        className="flex-shrink-0 px-2 py-1 rounded font-mono text-xs font-bold transition-all hover:scale-105 active:scale-95 text-white flex items-center gap-1"
+                        style={{ backgroundColor: colors.stroke, border: `1px solid ${colors.button}40` }}
+                      >
+                        <Play className="w-2.5 h-2.5 fill-current" />
+                        {formatTime(bookmark.time)}
+                      </button>
+
+                      {/* 描述 */}
+                      <span className="text-xs truncate font-medium" style={{ color: colors.headline }} title={bookmark.label}>
+                        {bookmark.label}
+                      </span>
+                    </div>
+
+                    {/* 控制動作與刪除 */}
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button 
+                        onClick={() => {
+                          setPointA(bookmark.time);
+                          setSuccessMessage(`起點 A 已設為 ${formatTime(bookmark.time)}`);
+                          setTimeout(() => setSuccessMessage(''), 2000);
+                        }}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white/5 hover:bg-white/10 active:scale-95 transition-all"
+                        style={{ color: colors.paragraph }}
+                      >
+                        A
+                      </button>
+                      <button 
+                        onClick={() => {
+                          if (pointA !== null && bookmark.time <= pointA) {
+                            setError('點 B 必須在點 A 之後');
+                            setTimeout(() => setError(''), 3000);
+                            return;
+                          }
+                          setPointB(bookmark.time);
+                          setSuccessMessage(`終點 B 已設為 ${formatTime(bookmark.time)}`);
+                          setTimeout(() => setSuccessMessage(''), 2000);
+                        }}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white/5 hover:bg-white/10 active:scale-95 transition-all text-[#7f5af0]"
+                        style={{ color: colors.button }}
+                      >
+                        B
+                      </button>
+                      <button 
+                        onClick={() => deleteBookmark(bookmark.id)}
+                        title="刪除書籤"
+                        className="p-1 rounded text-red-400 hover:bg-red-500/10 active:scale-95 transition-colors opacity-60 hover:opacity-100 ml-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="p-8 border-t border-opacity-5 flex items-start gap-4" style={{ borderColor: colors.paragraph, backgroundColor: colors.background }}>
