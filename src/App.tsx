@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search } from 'lucide-react';
+import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
 
@@ -153,6 +153,7 @@ export default function App() {
     id: string;
     time: number;
     label: string;
+    thumbnail?: string;
   }
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
@@ -584,6 +585,88 @@ export default function App() {
     }
   };
 
+  const captureScreenshot = (): string | undefined => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 160;
+      canvas.height = 90;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return undefined;
+
+      // 1. Try to find the HTML5 video element
+      const video = document.querySelector('video');
+      if (video) {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          return canvas.toDataURL('image/jpeg', 0.85);
+        } catch (videoErr) {
+          console.warn('Direct canvas draw from video element failed (likely due to cross-origin CORS restriction).', videoErr);
+        }
+      }
+
+      // 2. Beautiful procedural fallback mockup for audio/visual waveforms
+      const gradient = ctx.createLinearGradient(0, 0, 160, 90);
+      gradient.addColorStop(0, '#7f5af0');       // Elegant purple
+      gradient.addColorStop(0.5, '#2cb67d');     // Gentle emerald green
+      gradient.addColorStop(1, '#16161a');       // Dark deep background
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 160, 90);
+
+      // Simple geometric shape accents
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.beginPath();
+      ctx.arc(130, 25, 25, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+      ctx.beginPath();
+      ctx.arc(30, 70, 45, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Procedural mountains/waves representation
+      const barCount = 16;
+      const barWidth = 4;
+      const gap = 2;
+      const totalBarsWidth = barCount * (barWidth + gap) - gap;
+      const startX = (160 - totalBarsWidth) / 2;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+      for (let i = 0; i < barCount; i++) {
+        const heightFactor = Math.max(0.15, Math.sin(i * 0.4 + currentTime * 0.5) * 0.6 + 0.4 * Math.cos(i * 0.1));
+        const barHeight = Math.max(5, Math.round(heightFactor * 26));
+        const y = Math.round((90 - barHeight) / 2 - 5);
+        ctx.fillRect(startX + i * (barWidth + gap), y, barWidth, barHeight);
+      }
+
+      // Dark footer ribbon for the timestamp
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.fillRect(0, 68, 160, 22);
+
+      // Soft borders split line
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.fillRect(0, 68, 160, 1);
+
+      // Timestamp string overlay
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(formatTime(currentTime), 80, 79);
+
+      // Watermark title text
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.font = '8px sans-serif';
+      ctx.textAlign = 'left';
+      const maxCharCount = 20;
+      const cleanLabel = fileName ? (fileName.length > maxCharCount ? fileName.slice(0, maxCharCount - 3) + '...' : fileName) : 'AUDIO PREVIEW';
+      ctx.fillText(cleanLabel, 8, 14);
+
+      return canvas.toDataURL('image/jpeg', 0.85);
+    } catch (err) {
+      console.error('Failed to generate fallback thumbnail', err);
+      return undefined;
+    }
+  };
+
   const addBookmark = () => {
     if (!audioUrl) {
       setError('請先載入音檔，再新增書籤');
@@ -591,10 +674,19 @@ export default function App() {
       return;
     }
     const labelText = newBookmarkLabel.trim() || `書籤 @ ${formatTime(currentTime)}`;
+    
+    let thumbnail: string | undefined = undefined;
+    try {
+      thumbnail = captureScreenshot();
+    } catch (e) {
+      console.warn('Screenshot capture error:', e);
+    }
+
     const newB: Bookmark = {
       id: Math.random().toString(36).slice(2, 9),
       time: Math.round(currentTime * 10) / 10,
-      label: labelText
+      label: labelText,
+      thumbnail
     };
     setBookmarks(prev => [...prev, newB].sort((a, b) => a.time - b.time));
     setNewBookmarkLabel('');
@@ -613,6 +705,14 @@ export default function App() {
 
   useEffect(() => {
     if (!draggingMarker || !progressBarRef.current || duration === 0) return;
+    
+    // Trigger vibration feedback when dragging starts
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      navigator.vibrate(15);
+    }
+    
+    let lastVibratedSec = -1;
+
     const handleMove = (e: MouseEvent | TouchEvent) => {
       if (e.type === 'touchmove') e.preventDefault();
       const clientX = e.type.includes('touch') ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
@@ -625,6 +725,15 @@ export default function App() {
       } else if (draggingMarker === 'B') {
         setPointB(pointA !== null && newTime < pointA ? pointA : newTime);
       }
+
+      // Vibrate on changing major second increments to feel tactile
+      const currentSec = Math.floor(newTime * 2); // subtle notch every 0.5s
+      if (currentSec !== lastVibratedSec) {
+        lastVibratedSec = currentSec;
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          navigator.vibrate(8);
+        }
+      }
     };
     const handleEnd = () => {
       const { pointA: pA, pointB: pB } = stateRef.current;
@@ -634,6 +743,11 @@ export default function App() {
         jumpToAndPlay(Math.max(0, pB - 5));
       }
       setDraggingMarker(null);
+      
+      // End vibration
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate(10);
+      }
     };
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('touchmove', handleMove, { passive: false });
@@ -1397,24 +1511,30 @@ export default function App() {
                     {/* A/B Markers */}
                     {pointA !== null && (
                       <div 
-                        className="absolute top-1/2 -translate-y-1/2 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
+                        className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none w-11 h-11" 
                         style={{ left: `${(pointA / duration) * 100}%` }}
                         onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
                         onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
                       >
-                        <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all border rounded-sm ${draggingMarker === 'A' ? 'scale-125' : 'group-hover:scale-110'}`} style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>
+                        {/* Large invisible hit area visual cue */}
+                        <div className="absolute inset-0 rounded-full bg-[#7f5af0]/0 group-hover:bg-[#7f5af0]/5 group-active:bg-[#7f5af0]/15 transition-all duration-200 pointer-events-none scale-75" />
+                        
+                        <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all border rounded-sm relative z-10 ${draggingMarker === 'A' ? 'scale-125' : 'group-hover:scale-110'}`} style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>
                           {draggingMarker === 'A' ? formatTime(pointA) : 'A'}
                         </div>
                       </div>
                     )}
                     {pointB !== null && (
                       <div 
-                        className="absolute top-1/2 -translate-y-1/2 flex flex-col items-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none" 
+                        className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none w-11 h-11" 
                         style={{ left: `${(pointB / duration) * 100}%` }}
                         onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
                         onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
                       >
-                         <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all border rounded-sm ${draggingMarker === 'B' ? 'scale-125' : 'group-hover:scale-110'}`} style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>
+                        {/* Large invisible hit area visual cue */}
+                        <div className="absolute inset-0 rounded-full bg-[#2cb67d]/0 group-hover:bg-[#2cb67d]/5 group-active:bg-[#2cb67d]/15 transition-all duration-200 pointer-events-none scale-75" />
+                        
+                        <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all border rounded-sm relative z-10 ${draggingMarker === 'B' ? 'scale-125' : 'group-hover:scale-110'}`} style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>
                           {draggingMarker === 'B' ? formatTime(pointB) : 'B'}
                         </div>
                       </div>
@@ -1427,10 +1547,31 @@ export default function App() {
                     <div className="flex items-center gap-4 h-full">
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
-                        <div className="flex bg-white/5 rounded px-1 py-0.5">
+                        <div className="flex bg-white/5 rounded px-1 py-0.5 mr-1">
                           <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">-</button>
                           <span className="text-xs font-mono font-bold w-6 text-center">{playbackRate.toFixed(1)}</span>
                           <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">+</button>
+                        </div>
+                        {/* 預設播放速度切換 */}
+                        <div className="flex gap-1">
+                          {[0.5, 0.75, 1.0].map((rate) => {
+                            const isSelected = Math.abs(playbackRate - rate) < 0.01;
+                            return (
+                              <button
+                                key={rate}
+                                onClick={() => setPlaybackRate(rate)}
+                                className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition-all hover:scale-105 active:scale-95 ${
+                                  isSelected 
+                                    ? 'text-white font-black' 
+                                    : 'text-white/60 hover:text-white/90 bg-white/5 hover:bg-white/10'
+                                }`}
+                                style={isSelected ? { backgroundColor: colors.button } : undefined}
+                                title={`${rate}x 快速練習語速`}
+                              >
+                                {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -1438,6 +1579,44 @@ export default function App() {
                         <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
                       </div>
                     </div>
+                </div>
+              </div>
+
+              {/* Mobile-only Speed & Volume Controls */}
+              <div className="flex md:hidden items-center justify-between gap-2 bg-white/5 rounded-lg px-2.5 py-2 border border-white/5 text-xs">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
+                  <div className="flex bg-white/5 rounded px-1 py-0.5 mr-0.5">
+                    <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">-</button>
+                    <span className="text-xs font-mono font-bold w-6 text-center leading-normal">{playbackRate.toFixed(1)}</span>
+                    <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">+</button>
+                  </div>
+                  
+                  {/* Preset rates */}
+                  <div className="flex gap-1">
+                    {[0.5, 0.75, 1.0].map((rate) => {
+                      const isSelected = Math.abs(playbackRate - rate) < 0.01;
+                      return (
+                        <button
+                          key={rate}
+                          onClick={() => setPlaybackRate(rate)}
+                          className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition-all active:scale-95 ${
+                            isSelected 
+                              ? 'text-white font-black' 
+                              : 'text-white/60 hover:text-white/90 bg-white/5'
+                          }`}
+                          style={isSelected ? { backgroundColor: colors.button } : undefined}
+                        >
+                          {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
+                  <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
                 </div>
               </div>
 
@@ -1591,22 +1770,49 @@ export default function App() {
                     className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/5 bg-black/20 hover:bg-white/[0.03] transition-colors group/item"
                     style={{ borderColor: isCurrentActive ? `${colors.button}40` : undefined }}
                   >
-                    <div className="flex items-center gap-2 min-w-0 flex-grow">
-                      {/* 時間點按鈕 */}
-                      <button 
+                    <div className="flex items-center gap-2.5 min-w-0 flex-grow">
+                      {/* 縮圖（支援截圖或預設美化 fallback） */}
+                      <div 
+                        className="flex-shrink-0 w-14 h-9 rounded bg-black/40 overflow-hidden border border-white/10 select-none relative group-hover/item:border-white/20 transition-all shadow-sm cursor-pointer"
                         onClick={() => jumpToAndPlay(bookmark.time)}
-                        title="跳轉到此時間並播放"
-                        className="flex-shrink-0 px-2 py-1 rounded font-mono text-xs font-bold transition-all hover:scale-105 active:scale-95 text-white flex items-center gap-1"
-                        style={{ backgroundColor: colors.stroke, border: `1px solid ${colors.button}40` }}
+                        title="點擊跳轉並播放"
                       >
-                        <Play className="w-2.5 h-2.5 fill-current" />
-                        {formatTime(bookmark.time)}
-                      </button>
+                        {bookmark.thumbnail ? (
+                          <img 
+                            referrerPolicy="no-referrer" 
+                            src={bookmark.thumbnail} 
+                            alt={bookmark.label} 
+                            className="w-full h-full object-cover" 
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-gradient-to-br from-[#7f5af0]/20 to-[#2cb67d]/20 flex items-center justify-center">
+                            <Video className="w-3.5 h-3.5 opacity-40 text-white" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/20 group-hover/item:bg-black/0 transition-colors flex items-center justify-center">
+                          <Play className="w-3 h-3 text-white opacity-0 group-hover/item:opacity-95 transition-opacity" />
+                        </div>
+                      </div>
 
-                      {/* 描述 */}
-                      <span className="text-xs truncate font-medium" style={{ color: colors.headline }} title={bookmark.label}>
-                        {bookmark.label}
-                      </span>
+                      <div className="flex flex-col gap-0.5 min-w-0 flex-grow">
+                        {/* 描述 */}
+                        <span className="text-xs truncate font-semibold" style={{ color: colors.headline }} title={bookmark.label}>
+                          {bookmark.label}
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          {/* 時間點按鈕 */}
+                          <button 
+                            onClick={() => jumpToAndPlay(bookmark.time)}
+                            title="跳轉到此時間並播放"
+                            className="flex-shrink-0 px-2 py-0.5 rounded font-mono text-[10px] font-bold transition-all hover:scale-105 active:scale-95 text-white flex items-center gap-0.5"
+                            style={{ backgroundColor: colors.stroke, border: `1px solid ${colors.button}40` }}
+                          >
+                            <Play className="w-2 h-2 fill-current" />
+                            {formatTime(bookmark.time)}
+                          </button>
+                        </div>
+                      </div>
                     </div>
 
                     {/* 控制動作與刪除 */}
