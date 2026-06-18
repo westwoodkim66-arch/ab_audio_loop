@@ -45,6 +45,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const [inputText, setInputText] = useState("");
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showCopyPasteGuide, setShowCopyPasteGuide] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -278,6 +279,77 @@ ${JSON.stringify(chunk)}
     setIsProcessing(false);
   };
 
+  // Helper to parse pasted YouTube transcript text with timestamps
+  const parsePastedCoordinates = (text: string) => {
+    const rawLines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const result: any[] = [];
+    const timeRegex = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/; // e.g. "0:06", "1:23", "01:23:45"
+    
+    // Quick scan to detect alternating YouTube format
+    let timeCount = 0;
+    for (let i = 0; i < Math.min(rawLines.length, 10); i++) {
+      if (timeRegex.test(rawLines[i])) timeCount++;
+    }
+    
+    if (timeCount >= 2) {
+      let currentTimeVal = -1;
+      let currentTextStr = "";
+      
+      for (let i = 0; i < rawLines.length; i++) {
+        const line = rawLines[i];
+        if (timeRegex.test(line)) {
+          if (currentTimeVal !== -1 && currentTextStr.trim()) {
+            result.push({
+              id: `pasted_${Date.now()}_${result.length}`,
+              originalText: currentTextStr.trim(),
+              startTime: currentTimeVal,
+              endTime: -1
+            });
+            currentTextStr = "";
+          }
+          currentTimeVal = parseVttTime(line);
+        } else {
+          currentTextStr += (currentTextStr ? " " : "") + line;
+        }
+      }
+      if (currentTimeVal !== -1 && currentTextStr.trim()) {
+        result.push({
+          id: `pasted_${Date.now()}_${result.length}`,
+          originalText: currentTextStr.trim(),
+          startTime: currentTimeVal,
+          endTime: -1
+        });
+      }
+    } else {
+      // Inline coordinates bracket format: e.g. "[00:12.34] Hello World"
+      const inlineTimeRegex = /^[\[\(]([\d:.,]+)[\]\)]\s*(.*)$/;
+      for (const line of rawLines) {
+        const match = line.match(inlineTimeRegex);
+        if (match) {
+          const timeVal = parseVttTime(match[1]);
+          result.push({
+            id: `pasted_${Date.now()}_${result.length}`,
+            originalText: match[2].trim(),
+            startTime: timeVal,
+            endTime: -1
+          });
+        }
+      }
+    }
+    
+    // Post-process to calculate endTimes
+    for (let i = 0; i < result.length; i++) {
+      if (result[i].endTime === -1) {
+        if (i < result.length - 1) {
+          result[i].endTime = result[i + 1].startTime;
+        } else {
+          result[i].endTime = result[i].startTime + 3; // default last line duration 3s
+        }
+      }
+    }
+    return result;
+  };
+
   const loadYoutubeTranscript = async () => {
     if (!audioUrl || (!audioUrl.includes('youtube.com') && !audioUrl.includes('youtu.be'))) {
       setStatusText("請先載入有效的 YouTube 網址！");
@@ -286,9 +358,19 @@ ${JSON.stringify(chunk)}
     }
     setIsProcessing(true);
     setStatusText("正在讀取 YouTube 字幕...");
+    setShowCopyPasteGuide(false);
+    
     try {
       const res = await fetch(`/api/yt-transcript?url=${encodeURIComponent(audioUrl)}`);
-      if (!res.ok) throw new Error("無可用字幕或發生錯誤");
+      
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 403 || errData.error === "LOGIN_REQUIRED") {
+          throw new Error("此影片受到 YouTube 隱私/年齡限制或安全防禦阻擋，請使用下方的「手動貼上/複製字幕教學」！");
+        }
+        throw new Error(errData.error || "無可用字幕或發生錯誤");
+      }
+      
       const data = await res.json();
       
       // format to match prompt mapping
@@ -300,12 +382,13 @@ ${JSON.stringify(chunk)}
       }));
       
       setStatusText("正在進行語言分析與翻譯...");
-      // Now that we have chunking, we can process all lines reliably.
       await processTextWithGemini("", mapped); 
       
     } catch(e: any) {
       setStatusText("讀取失敗：" + e.message);
       setIsProcessing(false);
+      // Automatically prompt the user to use copy-paste backup when fail
+      setShowCopyPasteGuide(true);
     }
   };
 
@@ -313,7 +396,13 @@ ${JSON.stringify(chunk)}
     if(!inputText.trim()) return;
     setIsProcessing(true);
     setStatusText("正在進行語言分析與翻譯...");
-    processTextWithGemini(inputText);
+    
+    const coordinated = parsePastedCoordinates(inputText);
+    if (coordinated.length > 0) {
+      processTextWithGemini("", coordinated);
+    } else {
+      processTextWithGemini(inputText);
+    }
   };
 
   const [isPanelDragging, setIsPanelDragging] = useState(false);
@@ -619,6 +708,32 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             onDragLeave={(e) => { e.preventDefault(); setIsPanelDragging(false); }}
             onDrop={handlePanelDrop}
          >
+            {showCopyPasteGuide && (
+              <div className="mb-4 p-4 rounded-xl bg-[#e2b714]/10 border border-[#e2b714]/30 text-sm text-[#fffffe] flex flex-col gap-2">
+                <div className="flex items-center justify-between font-bold text-[#e2b714]">
+                  <span className="flex items-center gap-1.5 modal-title text-base">⚠️ 此影片受到 YouTube 隱私或年齡限制，伺服器無法直接抓取字幕</span>
+                  <button onClick={() => setShowCopyPasteGuide(false)} className="text-white/40 hover:text-white transition-opacity">✕</button>
+                </div>
+                <p className="opacity-90 leading-relaxed text-xs">
+                  別擔心！您可以透過以下 3 個簡單步驟，手動複製 YouTube 官方字幕並貼到下方框中進行智慧點讀與分析：
+                </p>
+                <div className="flex flex-col gap-2 scale-95 mt-1">
+                  <div className="flex gap-2">
+                    <span className="flex items-center justify-center w-5 h-5 rounded-full bg-[#e2b714] text-black text-xs font-bold leading-none shrink-0 mt-0.5">1</span>
+                    <span className="opacity-95 text-xs text-white">在 YouTube 影片頁面下方點擊 <b>「...」（更多項目）</b> 按鈕。</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="flex items-center justify-center w-5 h-5 rounded-full bg-[#e2b714] text-black text-xs font-bold leading-none shrink-0 mt-0.5">2</span>
+                    <span className="opacity-95 text-xs text-white">選擇 <b>「顯示原始視窗 / 顯示字幕」(Show transcript)</b>。</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="flex items-center justify-center w-5 h-5 rounded-full bg-[#e2b714] text-black text-xs font-bold leading-none shrink-0 mt-0.5">3</span>
+                    <span className="opacity-95 text-xs text-white">全選並<b>「複製」</b>字幕文字（包含時間戳記），直接<b>「貼上」</b>到下方輸入框中，點擊<b>「分析文稿」</b>即可！</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className={`rounded-xl p-4 border transition-all ${isPanelDragging ? 'bg-[#7f5af0]/10 border-[#7f5af0] scale-[1.02]' : 'bg-black/20 border-white/5 focus-within:border-[#7f5af0]/50'}`}>
                 <textarea 
                    className="w-full h-32 bg-transparent text-[#fffffe] outline-none resize-none placeholder:text-white/20"

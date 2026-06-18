@@ -122,14 +122,108 @@ async function startServer() {
         videoId = match[1];
       }
 
-      const { YoutubeTranscript } = require('youtube-transcript');
-      const transcript = await YoutubeTranscript.fetchTranscript(videoId);
-      
-      // format: [{text: "hi", duration: 1000, offset: 0}, ...]
-      res.json(transcript);
+      try {
+        console.log(`Attempting to fetch transcript directly with library for video: ${videoId}`);
+        const { YoutubeTranscript } = require('youtube-transcript');
+        const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+        return res.json(transcript);
+      } catch (innerError: any) {
+        console.warn("Direct YoutubeTranscript.fetchTranscript failed, attempting fallback parsing from watch page...", innerError.message);
+        
+        // Let's do our OWN clean fetch from watch page with a modern User Agent as fallback!
+        try {
+          const ytRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
+            }
+          });
+          
+          if (ytRes.ok) {
+            const html = await ytRes.text();
+            
+            // Look for captions block inside ytInitialPlayerResponse
+            const parseInlineJson = (e: string, t: string) => {
+              let n = `${t} = `, r = e.indexOf(n);
+              if (r === -1) return null;
+              let i = r + n.length, a = 0;
+              for (let t = i; t < e.length; t++) {
+                if (e[t] === `{`) a++;
+                else if (e[t] === `}` && (a--, a === 0)) {
+                  try {
+                    return JSON.parse(e.slice(i, t + 1));
+                  } catch (err) {
+                    return null;
+                  }
+                }
+              }
+              return null;
+            };
+            
+            const playerResponse = parseInlineJson(html, 'ytInitialPlayerResponse');
+            
+            if (playerResponse) {
+              console.log(`Bypass parser playabilityStatus:`, playerResponse.playabilityStatus?.status);
+              
+              if (playerResponse.playabilityStatus?.status === 'LOGIN_REQUIRED') {
+                return res.status(403).json({
+                  error: "LOGIN_REQUIRED",
+                  message: "此影片受到 YouTube 登入限制或年齡限制（Bot 偵測安全防護）。",
+                  videoId
+                });
+              }
+              
+              if (playerResponse.captions) {
+                const captionTracks = playerResponse.captions.playerCaptionsTracklistRenderer?.captionTracks;
+                if (captionTracks && captionTracks.length > 0) {
+                  // Find Chinese, or fallback to English, or fallback to first track
+                  const track = captionTracks.find((t: any) => t.languageCode === 'zh-TW' || t.languageCode === 'zh') || captionTracks[0];
+                  console.log(`Downloading track via fallback: ${track.languageCode} (${track.baseUrl})`);
+                  
+                  const trackRes = await fetch(track.baseUrl);
+                  if (trackRes.ok) {
+                    const xmlText = await trackRes.text();
+                    
+                    // Parse xml into [{text, duration, offset}]
+                    const lines: any[] = [];
+                    const regex = /<text start="([\d.]+)" dur="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/gi;
+                    let m;
+                    while ((m = regex.exec(xmlText)) !== null) {
+                      const startRaw = parseFloat(m[1]);
+                      const durRaw = parseFloat(m[2]);
+                      let rawText = m[3]
+                        .replace(/&amp;/g, '&')
+                        .replace(/&lt;/g, '<')
+                        .replace(/&gt;/g, '>')
+                        .replace(/&quot;/g, '"')
+                        .replace(/&#39;/g, "'")
+                        .replace(/<[^>]*>/g, ''); // strip XML tags
+                      
+                      lines.push({
+                        text: rawText,
+                        duration: Math.round(durRaw * 1000),
+                        offset: Math.round(startRaw * 1000)
+                      });
+                    }
+                    
+                    if (lines.length > 0) {
+                      console.log(`Successfully extracted ${lines.length} lines via custom crawler fallback!`);
+                      return res.json(lines);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (fallbackError: any) {
+          console.error("Custom tracker fallback failed:", fallbackError.message);
+        }
+        
+        throw innerError;
+      }
     } catch (error: any) {
       console.error("Youtube Transcript error:", error);
-      res.status(500).json({ error: "Failed to fetch transcript: " + error.message });
+      res.status(500).json({ error: error.message || "Failed to fetch transcript" });
     }
   });
 
