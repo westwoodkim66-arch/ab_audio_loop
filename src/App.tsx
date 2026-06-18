@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video } from 'lucide-react';
+import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
 
@@ -25,6 +25,13 @@ export default function App() {
     secondary: '#72757e',
     tertiary: '#2cb67d'
   };
+
+  const bookmarkColors = useMemo(() => [
+    { value: 'gray', label: '預設', bg: 'bg-white/10', border: 'border-white/20', text: 'text-white/80', dot: '#ffffff' },
+    { value: 'red', label: '待加強', bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-400', dot: '#ef4444' },
+    { value: 'green', label: '已掌握', bg: 'bg-green-500/10', border: 'border-green-500/30', text: 'text-green-400', dot: '#2cb67d' },
+    { value: 'blue', label: '生字區', bg: 'bg-blue-500/10', border: 'border-blue-500/30', text: 'text-blue-400', dot: '#3d8bff' },
+  ] as const, []);
 
   // 網址與本地儲存參數解析
   const getSearchParams = () => {
@@ -153,6 +160,7 @@ export default function App() {
     time: number;
     label: string;
     thumbnail?: string;
+    color?: 'red' | 'green' | 'blue' | 'gray';
   }
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
@@ -165,6 +173,9 @@ export default function App() {
   });
 
   const [newBookmarkLabel, setNewBookmarkLabel] = useState('');
+  const [selectedColorForNewBookmark, setSelectedColorForNewBookmark] = useState<'red' | 'green' | 'blue' | 'gray'>('gray');
+  const [bookmarkColorFilter, setBookmarkColorFilter] = useState<string>('all');
+  const [isGeneratingLabel, setIsGeneratingLabel] = useState(false);
   const [bookmarkSearchQuery, setBookmarkSearchQuery] = useState('');
 
   useEffect(() => {
@@ -178,6 +189,17 @@ export default function App() {
   const [previewTime, setPreviewTime] = useState<number | null>(null);
   const [isHoveringBar, setIsHoveringBar] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const [subtitleOffset, setSubtitleOffset] = useState<number>(0.15); // 微調字幕同步
+
+  const syncTime = useMemo(() => {
+    // 依據不同播放速率（playbackRate）實行自動補償
+    // 播放越快時，播放器輪詢（poll）落後的時間換算成媒體秒數越多，因此需要略微拉大位移
+    // 播放越慢時則反之，收斂補償位移。
+    const playbackRateMultiplier = playbackRate >= 1.0 
+      ? 1 + (playbackRate - 1) * 0.4 
+      : 1 - (1 - playbackRate) * 0.6;
+    return Math.max(0, currentTime + (subtitleOffset * playbackRateMultiplier));
+  }, [currentTime, subtitleOffset, playbackRate]);
 
   // --- Active Subtitle Overlay Logic ---
   const activeLineIndex = useMemo(() => {
@@ -185,33 +207,50 @@ export default function App() {
     let idx = transcriptLines.findIndex(line => 
       line.startTime !== undefined && line.endTime !== undefined && 
       line.startTime !== -1 && line.endTime !== -1 &&
-      currentTime >= line.startTime && currentTime <= line.endTime
+      syncTime >= line.startTime && syncTime <= line.endTime
     );
     // If we're strictly between lines, find the last active line (optional, but follows TranscriptPanel)
     if (idx === -1 && transcriptLines[0]?.startTime !== -1 && transcriptLines[0]?.startTime !== undefined) {
       for (let i = transcriptLines.length - 1; i >= 0; i--) {
-        if (transcriptLines[i].startTime !== undefined && transcriptLines[i].startTime !== -1 && currentTime >= (transcriptLines[i].startTime as number)) {
+        if (transcriptLines[i].startTime !== undefined && transcriptLines[i].startTime !== -1 && syncTime >= (transcriptLines[i].startTime as number)) {
           idx = i;
           break;
         }
       }
     }
     return idx;
-  }, [currentTime, transcriptLines]);
+  }, [syncTime, transcriptLines]);
 
   const activeWordIndex = useMemo(() => {
     if (activeLineIndex === -1 || !transcriptLines) return -1;
     const line = transcriptLines[activeLineIndex];
     if (line.startTime == null || line.endTime == null || line.startTime === -1 || line.endTime === -1) return -1;
-    if (currentTime < line.startTime || currentTime > line.endTime) return -1;
+    if (syncTime < line.startTime || syncTime > line.endTime) return -1;
     
     const duration = line.endTime - line.startTime;
     if (duration <= 0) return -1;
     
-    const progress = (currentTime - line.startTime) / duration;
+    // 計算初始線性進度，限定於 [0, 1] 之間
+    let rawProgress = (syncTime - line.startTime) / duration;
+    rawProgress = Math.max(0, Math.min(1, rawProgress));
     
     const totalChars = line.words.reduce((acc, w) => acc + (w.word || w.romaji || " ").length, 0);
     if (totalChars === 0) return -1;
+    
+    // --- 語速與播放速率對應之高亮補償與曲線平滑設計 ---
+    // 利用非線性的 Hermite 內插（Smoothstep sCurve）對原始進度進行扭曲修正
+    // 解決以下問題：
+    //  - 句子開頭與結尾往往有音訊空白或起音延遲（起步稍慢、結尾收音慢、中間核心語音最密集）
+    //  - 語速（speechRate = 字數 / 時間）低時，意即語速慢、停頓多，S 曲線的效果要越顯著以過濾首尾遲滯
+    //  - 語速高時，講話緊湊、幾乎無縫，字詞渲染回歸線性
+    const speechRate = totalChars / duration; // 每秒字元數 (或詞數)
+    
+    // 當語速極慢時 (比如 < 3)，sCurve 權重提高，過濾頭尾空白；
+    // 當語速極快時，sCurve 權重調低，使高亮變連貫
+    const warpStrength = Math.max(0.1, Math.min(0.85, 1.4 / (speechRate + 1.2)));
+    
+    const sCurve = 3 * Math.pow(rawProgress, 2) - 2 * Math.pow(rawProgress, 3);
+    const progress = rawProgress * (1 - warpStrength) + sCurve * warpStrength;
     
     let currentChars = 0;
     for (let i = 0; i < line.words.length; i++) {
@@ -224,7 +263,7 @@ export default function App() {
         }
     }
     return line.words.length - 1;
-  }, [activeLineIndex, currentTime, transcriptLines]);
+  }, [activeLineIndex, syncTime, transcriptLines, playbackRate]);
 
   const activeLine = activeLineIndex !== -1 ? transcriptLines[activeLineIndex] : null;
 
@@ -729,6 +768,88 @@ export default function App() {
     }
   };
 
+  const getABTranscriptText = useCallback(() => {
+    if (pointA === null || pointB === null || !transcriptLines) return "";
+    const start = Math.min(pointA, pointB);
+    const end = Math.max(pointA, pointB);
+    
+    // 過濾出與 AB 區間有重疊的字幕行
+    const linesInRange = transcriptLines.filter(line => {
+      if (line.startTime === undefined || line.endTime === undefined || line.startTime === -1 || line.endTime === -1) {
+        return false;
+      }
+      return line.startTime < end && line.endTime > start;
+    });
+    
+    if (linesInRange.length === 0) return "";
+    
+    return linesInRange.map(line => {
+      const parts = [];
+      if (line.text) parts.push(line.text);
+      if (line.translation) parts.push(`(${line.translation})`);
+      return parts.join(' ');
+    }).join('\n');
+  }, [pointA, pointB, transcriptLines]);
+
+  const generateAIBookmarkLabel = async () => {
+    if (pointA === null || pointB === null) {
+      setError("請先設定 A/B 區間來指定要分析的字幕段落！");
+      setTimeout(() => setError(""), 3000);
+      return;
+    }
+    
+    const text = getABTranscriptText();
+    if (!text) {
+      setError("當前 A/B 區間內沒有偵測到字幕文字！");
+      setTimeout(() => setError(""), 3000);
+      return;
+    }
+    
+    setIsGeneratingLabel(true);
+    try {
+      const response = await fetch('/api/gemini/generateContent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gemini-2.5-flash',
+          contents: [
+            {
+              parts: [
+                {
+                  text: `以下是使用者正在學習的一段音軌字幕文字：\n\n"${text}"\n\n請以繁體中文自動產生一個極為精簡的摘要說明或學習標籤（例如：「談論興趣與夢想」、「文法：～ている」、「聽力盲點練習」），長度請控制在 15 字以內。直接回答這句標籤，禁止包含任何引號、括號、前綴、說明或任何引言文字。`
+                }
+              ]
+            }
+          ]
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API 錯誤: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      if (data && data.text) {
+        const cleanedLabel = data.text.trim().replace(/^["'「`]+|["'」`]+$/g, '');
+        setNewBookmarkLabel(cleanedLabel);
+        setSuccessMessage("AI 標籤生成成功！");
+      } else {
+        throw new Error("API 回傳結構不正確");
+      }
+    } catch (err: any) {
+      console.error("AI 標籤生成失敗:", err);
+      setError(`AI 生成失敗：${err.message || err}`);
+    } finally {
+      setIsGeneratingLabel(false);
+      setTimeout(() => {
+        setSuccessMessage("");
+        setError("");
+      }, 3000);
+    }
+  };
+
   const addBookmark = () => {
     if (!audioUrl) {
       setError('請先載入音檔，再新增書籤');
@@ -748,7 +869,8 @@ export default function App() {
       id: Math.random().toString(36).slice(2, 9),
       time: Math.round(currentTime * 10) / 10,
       label: labelText,
-      thumbnail
+      thumbnail,
+      color: selectedColorForNewBookmark
     };
     setBookmarks(prev => [...prev, newB].sort((a, b) => a.time - b.time));
     setNewBookmarkLabel('');
@@ -1230,10 +1352,14 @@ export default function App() {
     }
   };
 
-  const filteredBookmarks = bookmarks.filter(b => 
-    b.label.toLowerCase().includes(bookmarkSearchQuery.toLowerCase()) ||
-    formatTime(b.time).includes(bookmarkSearchQuery)
-  );
+  const filteredBookmarks = bookmarks.filter(b => {
+    const matchesQuery = b.label.toLowerCase().includes(bookmarkSearchQuery.toLowerCase()) ||
+      formatTime(b.time).includes(bookmarkSearchQuery);
+    
+    if (bookmarkColorFilter === 'all') return matchesQuery;
+    const bColor = b.color || 'gray';
+    return matchesQuery && bColor === bookmarkColorFilter;
+  });
 
   return (
     <div className="min-h-screen flex flex-col items-center py-12 px-4 font-sans relative" style={{ backgroundColor: colors.background, color: colors.paragraph }}>
@@ -1445,6 +1571,7 @@ export default function App() {
                           setIsPlaying(false);
                         }
                       }}
+                      progressInterval={100}
                       onProgress={(state: any) => {
                         setCurrentTime(state.playedSeconds);
                       }}
@@ -1604,7 +1731,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Compact Speed & Volume */}
+                {/* Compact Speed, Sync & Volume */}
                 <div className="hidden md:flex flex-shrink-0 flex-col items-end gap-1 px-1">
                     <div className="flex items-center gap-4 h-full">
                       <div className="flex items-center gap-1.5">
@@ -1636,7 +1763,21 @@ export default function App() {
                           })}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5">
+
+                      {/* 字幕微調控制項 (桌機版) */}
+                      <div className="flex items-center gap-1.5 border-l border-white/10 pl-3">
+                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-50" title="調整字幕與聲音的相對延遲。若高亮太慢，請增加秒數；若太快，請減少秒數。">字幕同步</span>
+                        <div className="flex bg-white/5 rounded px-1 py-0.5">
+                          <button onClick={() => setSubtitleOffset(o => Math.max(-2.0, Math.round((o - 0.05) * 20) / 20))} className="px-1 py-0.5 hover:bg-white/10 rounded text-[10px] font-mono font-bold" title="提前字幕">-0.05s</button>
+                          <span className="text-[11px] font-mono font-bold w-14 text-center" style={{ color: subtitleOffset === 0 ? colors.paragraph : subtitleOffset > 0 ? '#2cb67d' : '#ef4444' }}>
+                            {subtitleOffset >= 0 ? `+${subtitleOffset.toFixed(2)}` : subtitleOffset.toFixed(2)}s
+                          </span>
+                          <button onClick={() => setSubtitleOffset(o => Math.min(2.0, Math.round((o + 0.05) * 20) / 20))} className="px-1 py-0.5 hover:bg-white/10 rounded text-[10px] font-mono font-bold" title="延後字幕">+0.05s</button>
+                        </div>
+                        <button onClick={() => setSubtitleOffset(0.15)} className="text-[9px] bg-white/10 hover:bg-white/20 px-1 py-0.5 rounded text-white/70 hover:text-white" title="重設為預設最佳值 (0.15s)">重設</button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 border-l border-white/10 pl-3">
                         <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
                         <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
                       </div>
@@ -1644,41 +1785,57 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Mobile-only Speed & Volume Controls */}
-              <div className="flex md:hidden items-center justify-between gap-2 bg-white/5 rounded-lg px-2.5 py-2 border border-white/5 text-xs">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
-                  <div className="flex bg-white/5 rounded px-1 py-0.5 mr-0.5">
-                    <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">-</button>
-                    <span className="text-xs font-mono font-bold w-6 text-center leading-normal">{playbackRate.toFixed(1)}</span>
-                    <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">+</button>
+              {/* Mobile-only Speed, Sync & Volume Controls */}
+              <div className="flex md:hidden flex-col gap-2 bg-white/5 rounded-lg px-2.5 py-2 border border-white/5 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
+                    <div className="flex bg-white/5 rounded px-1 py-0.5 mr-0.5">
+                      <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">-</button>
+                      <span className="text-xs font-mono font-bold w-6 text-center leading-normal">{playbackRate.toFixed(1)}</span>
+                      <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">+</button>
+                    </div>
+                    
+                    {/* Preset rates */}
+                    <div className="flex gap-1">
+                      {[0.5, 0.75, 1.0].map((rate) => {
+                        const isSelected = Math.abs(playbackRate - rate) < 0.01;
+                        return (
+                          <button
+                            key={rate}
+                            onClick={() => setPlaybackRate(rate)}
+                            className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition-all active:scale-95 ${
+                              isSelected 
+                                ? 'text-white font-black' 
+                                : 'text-white/60 hover:text-white/90 bg-white/5'
+                            }`}
+                            style={isSelected ? { backgroundColor: colors.button } : undefined}
+                          >
+                            {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                  
-                  {/* Preset rates */}
-                  <div className="flex gap-1">
-                    {[0.5, 0.75, 1.0].map((rate) => {
-                      const isSelected = Math.abs(playbackRate - rate) < 0.01;
-                      return (
-                        <button
-                          key={rate}
-                          onClick={() => setPlaybackRate(rate)}
-                          className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition-all active:scale-95 ${
-                            isSelected 
-                              ? 'text-white font-black' 
-                              : 'text-white/60 hover:text-white/90 bg-white/5'
-                          }`}
-                          style={isSelected ? { backgroundColor: colors.button } : undefined}
-                        >
-                          {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
-                        </button>
-                      );
-                    })}
+
+                  <div className="flex items-center gap-1.5">
+                    <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
+                    <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5">
-                  <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
-                  <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
+                <div className="flex items-center justify-between border-t border-white/5 pt-2">
+                  <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">字幕同步</span>
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex bg-white/5 rounded px-1 py-0.5">
+                      <button onClick={() => setSubtitleOffset(o => Math.max(-2.0, Math.round((o - 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">-0.05s</button>
+                      <span className="text-xs font-mono font-bold w-14 text-center leading-loose" style={{ color: subtitleOffset === 0 ? colors.paragraph : subtitleOffset > 0 ? '#2cb67d' : '#ef4444' }}>
+                        {subtitleOffset >= 0 ? `+${subtitleOffset.toFixed(2)}` : subtitleOffset.toFixed(2)}s
+                      </span>
+                      <button onClick={() => setSubtitleOffset(o => Math.min(2.0, Math.round((o + 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">+0.05s</button>
+                    </div>
+                    <button onClick={() => setSubtitleOffset(0.15)} className="text-[10px] bg-white/10 hover:bg-white/20 px-1.5 py-0.5 rounded text-white/70 hover:text-white">重設</button>
+                  </div>
                 </div>
               </div>
 
@@ -1739,16 +1896,18 @@ export default function App() {
                           id: Math.random().toString(36).slice(2, 9),
                           time: Math.round(pointA * 10) / 10,
                           label: currentLoopName,
-                          thumbnail
+                          thumbnail,
+                          color: selectedColorForNewBookmark
                         };
                         setBookmarks(prev => [...prev, newB].sort((a, b) => a.time - b.time));
-                        setSuccessMessage(`已將此句字幕儲存為書籤（起點：${formatTime(pointA)}）`);
+                        setSuccessMessage(`已將此句字幕儲存為具有【${bookmarkColors.find(c => c.value === selectedColorForNewBookmark)?.label || '預設'}】標記的書籤（起點：${formatTime(pointA)}）`);
                         setTimeout(() => setSuccessMessage(''), 3000);
                       }}
-                      className="flex-shrink-0 self-start sm:self-center bg-[#7f5af0]/20 hover:bg-[#7f5af0]/30 text-white hover:text-white border border-[#7f5af0]/30 hover:border-[#7f5af0]/50 rounded-md px-2.5 py-1 text-[11px] font-bold transition-all flex items-center justify-center gap-1 active:scale-95 whitespace-nowrap"
+                      className="flex-shrink-0 self-start sm:self-center bg-[#7f5af0]/20 hover:bg-[#7f5af0]/30 text-white hover:text-white border border-[#7f5af0]/30 hover:border-[#7f5af0]/50 rounded-md px-2.5 py-1 text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 active:scale-95 whitespace-nowrap"
                     >
                       <Plus className="w-3 h-3" />
-                      儲存此句為書籤
+                      <span>儲存此句為書籤</span>
+                      <span className="w-2 h-2 rounded-full inline-block ml-0.5" style={{ backgroundColor: bookmarkColors.find(c => c.value === selectedColorForNewBookmark)?.dot || '#ffffff' }} title={`將以「${bookmarkColors.find(c => c.value === selectedColorForNewBookmark)?.label}」顏色標籤儲存`} />
                     </button>
                   )}
                 </div>
@@ -1841,28 +2000,106 @@ export default function App() {
           </div>
 
           {/* 新增書籤控制列 */}
-          <div className="flex flex-col sm:flex-row gap-2 mb-4">
-            <div className="relative flex-grow">
-              <Tag className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-40" />
-              <input 
-                type="text" 
-                placeholder={`書籤說明（選填，預設：書籤 @ ${formatTime(currentTime)}）`}
-                className="w-full pl-9 pr-4 py-2 text-xs bg-black/40 border border-white/10 rounded-lg outline-none focus:border-[#7f5af0]/50 transition-colors"
-                style={{ color: colors.headline }}
-                value={newBookmarkLabel}
-                onChange={(e) => setNewBookmarkLabel(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && addBookmark()}
-              />
+          <div className="flex flex-col gap-3 mb-5 p-3 rounded-xl bg-white/[0.01] border border-white/5">
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-grow">
+                <Tag className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-40" />
+                <input 
+                  type="text" 
+                  placeholder={`書籤說明（選填，預設：書籤 @ ${formatTime(currentTime)}）`}
+                  className="w-full pl-9 pr-28 py-2 text-xs bg-black/40 border border-white/10 rounded-lg outline-none focus:border-[#7f5af0]/50 transition-colors"
+                  style={{ color: colors.headline }}
+                  value={newBookmarkLabel}
+                  onChange={(e) => setNewBookmarkLabel(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addBookmark()}
+                />
+                <button
+                  type="button"
+                  onClick={generateAIBookmarkLabel}
+                  disabled={isGeneratingLabel || pointA === null || pointB === null}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded bg-[#7f5af0]/20 hover:bg-[#7f5af0]/30 border border-[#7f5af0]/30 hover:border-[#7f5af0]/50 text-white transition-all disabled:opacity-30 disabled:scale-100 disabled:cursor-not-allowed active:scale-95"
+                  title={pointA === null || pointB === null ? "請設定 AB 區間以分析對應字幕文字" : "自動分析 AB 區間字幕文字並生成繁中標籤"}
+                >
+                  <Sparkles className={`w-3.5 h-3.5 text-[#a78bfa] ${isGeneratingLabel ? 'animate-spin' : ''}`} />
+                  <span>{isGeneratingLabel ? "AI 摘要中" : "AI 自動生成"}</span>
+                </button>
+              </div>
+              <button 
+                onClick={addBookmark}
+                className="flex-shrink-0 px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 text-white active:scale-95 shadow-md hover:opacity-90"
+                style={{ backgroundColor: colors.button }}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                新增當前時間 ({formatTime(currentTime)})
+              </button>
             </div>
-            <button 
-              onClick={addBookmark}
-              className="flex-shrink-0 px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 text-white active:scale-95 shadow-md hover:opacity-90"
-              style={{ backgroundColor: colors.button }}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              新增當前時間 ({formatTime(currentTime)})
-            </button>
+
+            {/* 顏色標記選擇器 */}
+            <div className="flex flex-wrap items-center gap-2 text-xs border-t border-white/5 pt-2.5">
+              <span className="opacity-50">選擇顏色標記：</span>
+              <div className="flex flex-wrap gap-1.5">
+                {bookmarkColors.map(c => {
+                  const isSelected = selectedColorForNewBookmark === c.value;
+                  return (
+                    <button
+                      key={c.value}
+                      type="button"
+                      onClick={() => setSelectedColorForNewBookmark(c.value)}
+                      className={`px-2.5 py-1 rounded-md border text-[11px] font-medium flex items-center gap-1.5 transition-all select-none ${
+                        isSelected 
+                          ? `${c.bg} ${c.border} ${c.text} font-bold scale-105 shadow-sm` 
+                          : 'bg-black/20 border-white/5 text-white/50 hover:text-white hover:border-white/10 active:scale-95'
+                      }`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: c.dot }} />
+                      <span>{c.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
+
+          {/* 書籤分類過濾面板 */}
+          {bookmarks.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-2 bg-black/10 border border-white/5 rounded-xl text-xs">
+              <div className="flex items-center gap-2">
+                <span className="opacity-40 font-bold tracking-wider uppercase text-[10px]">顏色篩選：</span>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    onClick={() => setBookmarkColorFilter('all')}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
+                      bookmarkColorFilter === 'all'
+                        ? 'bg-white/10 border border-white/20 text-white'
+                        : 'opacity-40 hover:opacity-100 text-white/60'
+                    }`}
+                  >
+                    全部 ({bookmarks.length})
+                  </button>
+                  {bookmarkColors.map(c => {
+                    const count = bookmarks.filter(b => (b.color || 'gray') === c.value).length;
+                    return (
+                      <button
+                        key={c.value}
+                        onClick={() => setBookmarkColorFilter(c.value)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all flex items-center gap-1 border ${
+                          bookmarkColorFilter === c.value
+                            ? `${c.bg} ${c.border} ${c.text}`
+                            : 'bg-transparent border-transparent opacity-40 hover:opacity-100 text-white/60'
+                        }`}
+                      >
+                        <span className="w-1 h-1 rounded-full inline-block" style={{ backgroundColor: c.dot }} />
+                        <span>{c.label} ({count})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="text-[10px] opacity-40 font-mono">
+                顯示 {filteredBookmarks.length} 個書籤
+              </div>
+            </div>
+          )}
 
           {/* 書籤列表 */}
           {bookmarks.length === 0 ? (
@@ -1873,17 +2110,21 @@ export default function App() {
             </div>
           ) : filteredBookmarks.length === 0 ? (
             <div className="py-6 text-center text-xs opacity-50">
-              找不到符合「{bookmarkSearchQuery}」的書籤。
+              找不到符合「{bookmarkSearchQuery}」與篩選條件的書籤。
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1 font-sans">
               {filteredBookmarks.map((bookmark) => {
                 const isCurrentActive = Math.abs(currentTime - bookmark.time) < 0.5;
+                const bColorObj = bookmarkColors.find(c => c.value === (bookmark.color || 'gray')) || bookmarkColors[0];
                 return (
                   <div 
                     key={bookmark.id}
-                    className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/5 bg-black/20 hover:bg-white/[0.03] transition-colors group/item"
-                    style={{ borderColor: isCurrentActive ? `${colors.button}40` : undefined }}
+                    className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/5 bg-black/20 hover:bg-white/[0.03] transition-all duration-200 group/item border-l-4"
+                    style={{ 
+                      borderColor: isCurrentActive ? `${colors.button}40` : undefined,
+                      borderLeftColor: bColorObj.dot
+                    }}
                   >
                     <div className="flex items-center gap-2.5 min-w-0 flex-grow">
                       {/* 縮圖（支援截圖或預設美化 fallback） */}
@@ -1915,7 +2156,7 @@ export default function App() {
                           {bookmark.label}
                         </span>
 
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           {/* 時間點按鈕 */}
                           <button 
                             onClick={() => jumpToAndPlay(bookmark.time)}
@@ -1925,6 +2166,24 @@ export default function App() {
                           >
                             <Play className="w-2 h-2 fill-current" />
                             {formatTime(bookmark.time)}
+                          </button>
+
+                          {/* 顏色標記（點擊可切換） */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const bColors = ['gray', 'red', 'green', 'blue'] as const;
+                              const curIdx = bColors.indexOf(bookmark.color || 'gray');
+                              const nextColor = bColors[(curIdx + 1) % bColors.length];
+                              setBookmarks(prev => prev.map(b => b.id === bookmark.id ? { ...b, color: nextColor } : b));
+                              setSuccessMessage(`已將標記顏色切換為「${bookmarkColors.find(c => c.value === nextColor)?.label}」`);
+                              setTimeout(() => setSuccessMessage(''), 1500);
+                            }}
+                            title="點擊重設或切換顏色標籤"
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold border flex items-center gap-1 transition-all hover:scale-105 active:scale-95 cursor-pointer ${bColorObj.bg} ${bColorObj.border} ${bColorObj.text}`}
+                          >
+                            <span className="w-1 h-1 rounded-full inline-block" style={{ backgroundColor: bColorObj.dot }} />
+                            <span>{bColorObj.label}</span>
                           </button>
                         </div>
                       </div>
@@ -1989,7 +2248,7 @@ export default function App() {
         <TranscriptPanel 
           playerRef={playerRef} 
           audioUrl={audioUrl} 
-          currentTime={currentTime} 
+          currentTime={syncTime} 
           initialLines={transcriptLines}
           onLinesChange={setTranscriptLines}
         />

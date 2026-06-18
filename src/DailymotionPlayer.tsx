@@ -179,7 +179,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
               }
             }
           } catch(e){}
-        }, 250);
+        }, 100);
 
         // 把 player 介面注入 playerRef 給外部使用
         if (playerRef) {
