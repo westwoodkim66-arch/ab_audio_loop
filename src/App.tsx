@@ -256,6 +256,69 @@ export default function App() {
     return match ? match[1] : null;
   }, [audioUrl]);
 
+  // 計算 A/B 循環區間對應的字幕名稱（自動建議）
+  const currentLoopName = useMemo(() => {
+    if (pointA === null || pointB === null || !transcriptLines || transcriptLines.length === 0) return '';
+    
+    let bestLine = null;
+    let maxOverlap = 0;
+    
+    const midPoint = (pointA + pointB) / 2;
+    
+    for (const line of transcriptLines) {
+      if (line.startTime === null || line.endTime === null || line.startTime === -1 || line.endTime === -1) continue;
+      
+      const start = line.startTime;
+      const end = line.endTime;
+      
+      const intersectStart = Math.max(pointA, start);
+      const intersectEnd = Math.min(pointB, end);
+      const overlap = Math.max(0, intersectEnd - intersectStart);
+      
+      if (overlap > maxOverlap) {
+        maxOverlap = overlap;
+        bestLine = line;
+      }
+      
+      if (overlap === 0 && midPoint >= start && midPoint <= end) {
+        bestLine = line;
+      }
+    }
+    
+    return bestLine ? bestLine.originalText : '';
+  }, [pointA, pointB, transcriptLines]);
+
+  const currentLoopTranslation = useMemo(() => {
+    if (pointA === null || pointB === null || !transcriptLines || transcriptLines.length === 0) return '';
+    
+    let bestLine = null;
+    let maxOverlap = 0;
+    
+    const midPoint = (pointA + pointB) / 2;
+    
+    for (const line of transcriptLines) {
+      if (line.startTime === null || line.endTime === null || line.startTime === -1 || line.endTime === -1) continue;
+      
+      const start = line.startTime;
+      const end = line.endTime;
+      
+      const intersectStart = Math.max(pointA, start);
+      const intersectEnd = Math.min(pointB, end);
+      const overlap = Math.max(0, intersectEnd - intersectStart);
+      
+      if (overlap > maxOverlap) {
+        maxOverlap = overlap;
+        bestLine = line;
+      }
+      
+      if (overlap === 0 && midPoint >= start && midPoint <= end) {
+        bestLine = line;
+      }
+    }
+    
+    return bestLine ? bestLine.translation : '';
+  }, [pointA, pointB, transcriptLines]);
+
   // 用來在長按 interval 或鍵盤監聽中取得最新狀態，避免閉包問題
   const stateRef = useRef({ pointA, pointB, currentTime, duration, isRepeatEnabled, audioUrl, isPlaying, volume, playbackRate, activeLine });
   useEffect(() => {
@@ -1637,6 +1700,76 @@ export default function App() {
                   onSetPointA={(time) => setPointA(time)}
                   onSetPointB={(time) => setPointB(time)}
                 />
+              )}
+
+              {/* 當前 A/B 循環區間對應的字幕名稱與建議 */}
+              {pointA !== null && pointB !== null && (
+                <div 
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-[#7f5af0]/10 border border-[#7f5af0]/20 rounded-lg p-3.5 transition-all duration-300"
+                  style={{ borderColor: `${colors.button}30` }}
+                >
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <span 
+                      className="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider whitespace-nowrap select-none mt-0.5" 
+                      style={{ backgroundColor: `${colors.button}20`, color: colors.button }}
+                    >
+                      當前循環句
+                    </span>
+                    <div className="flex flex-col min-w-0">
+                      {currentLoopName ? (
+                        <>
+                          <span className="text-xs sm:text-sm font-bold text-white font-sans break-words leading-relaxed">
+                            {currentLoopName}
+                          </span>
+                          {currentLoopTranslation && (
+                            <span className="text-[11px] text-white/50 font-medium font-sans mt-0.5 break-words">
+                              {currentLoopTranslation}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-xs text-white/40 italic">
+                          當前 A/B 時間點 ({formatTime(pointA)} ~ {formatTime(pointB)}) 未偵測到完整對應的字幕句。
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* 一鍵儲存該句為書籤 */}
+                  {currentLoopName && (
+                    <button
+                      onClick={() => {
+                        const existing = bookmarks.find(b => b.label === currentLoopName && Math.abs(b.time - pointA) < 0.1);
+                        if (existing) {
+                          setSuccessMessage('此句子已存在於書籤中囉！');
+                          setTimeout(() => setSuccessMessage(''), 2500);
+                          return;
+                        }
+                        
+                        let thumbnail: string | undefined = undefined;
+                        try {
+                          thumbnail = captureScreenshot();
+                        } catch (e) {
+                          console.warn('Screenshot capture error:', e);
+                        }
+
+                        const newB: Bookmark = {
+                          id: Math.random().toString(36).slice(2, 9),
+                          time: Math.round(pointA * 10) / 10,
+                          label: currentLoopName,
+                          thumbnail
+                        };
+                        setBookmarks(prev => [...prev, newB].sort((a, b) => a.time - b.time));
+                        setSuccessMessage(`已將此句字幕儲存為書籤（起點：${formatTime(pointA)}）`);
+                        setTimeout(() => setSuccessMessage(''), 3000);
+                      }}
+                      className="flex-shrink-0 self-start sm:self-center bg-[#7f5af0]/20 hover:bg-[#7f5af0]/30 text-white hover:text-white border border-[#7f5af0]/30 hover:border-[#7f5af0]/50 rounded-md px-2.5 py-1 text-[11px] font-bold transition-all flex items-center justify-center gap-1 active:scale-95 whitespace-nowrap"
+                    >
+                      <Plus className="w-3 h-3" />
+                      儲存此句為書籤
+                    </button>
+                  )}
+                </div>
               )}
 
               {/* Bottom Row: A/B Controls (Compact) */}

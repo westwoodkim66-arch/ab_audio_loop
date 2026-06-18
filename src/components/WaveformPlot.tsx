@@ -35,10 +35,6 @@ export default function WaveformPlot({
   const [hoverX, setHoverX] = useState<number | null>(null);
   const [isScrubbing, setIsScrubbing] = useState(false);
 
-  // Silence detection controls
-  const [showSilence, setShowSilence] = useState(true);
-  const [silenceThreshold, setSilenceThreshold] = useState(0.08);
-
   // Zoom factor (1.0 = fully zoomed out, showing complete duration)
   const [zoom, setZoom] = useState<number>(1.0);
   // Visible viewport starting offset (0.0 to 1-1/zoom)
@@ -209,50 +205,6 @@ export default function WaveformPlot({
     return result;
   }, [peaks, zoom, scrollOffset]);
 
-  // Compute silence zones for visual overlays based on peaks threshold
-  const silenceZones = useMemo(() => {
-    if (peaks.length === 0 || duration === 0 || !showSilence) return [];
-    
-    const zones: { startSec: number; endSec: number }[] = [];
-    let inSilence = false;
-    let silenceStartIdx = 0;
-    
-    // Scan peaks
-    for (let i = 0; i < peaks.length; i++) {
-      const isQuiet = peaks[i] <= silenceThreshold;
-      if (isQuiet) {
-        if (!inSilence) {
-          inSilence = true;
-          silenceStartIdx = i;
-        }
-      } else {
-        if (inSilence) {
-          inSilence = false;
-          const durationOfSilence = ((i - silenceStartIdx) / peaks.length) * duration;
-          // Silence must last for at least 0.3 seconds to represent a meaningful voice rhythm gap
-          if (durationOfSilence >= 0.3) {
-            zones.push({
-              startSec: (silenceStartIdx / peaks.length) * duration,
-              endSec: (i / peaks.length) * duration
-            });
-          }
-        }
-      }
-    }
-    
-    if (inSilence) {
-      const durationOfSilence = ((peaks.length - silenceStartIdx) / peaks.length) * duration;
-      if (durationOfSilence >= 0.3) {
-        zones.push({
-          startSec: (silenceStartIdx / peaks.length) * duration,
-          endSec: duration
-        });
-      }
-    }
-    
-    return zones;
-  }, [peaks, duration, silenceThreshold, showSilence]);
-
   // Click / Mouse helper for converting canvas pixel coordinate to absolute seconds
   const getTimeForX = (x: number) => {
     if (duration === 0) return 0;
@@ -409,47 +361,6 @@ export default function WaveformPlot({
       }
     }
 
-    // 1.5. Render detected silent zones (Pauses and Gaps in Speech Rhythm)
-    if (showSilence && silenceZones.length > 0) {
-      silenceZones.forEach((zone) => {
-        const xStart = getXForTime(zone.startSec);
-        const xEnd = getXForTime(zone.endSec);
-
-        if (xStart !== null && xEnd !== null) {
-          const renderXStart = Math.max(0, xStart);
-          const renderXEnd = Math.min(width, xEnd);
-          
-          if (renderXEnd > renderXStart) {
-            // Draw visual background overlay representing quiet zone
-            ctx.fillStyle = 'rgba(239, 68, 68, 0.05)'; // Super subtle rose background
-            ctx.fillRect(renderXStart, 2, renderXEnd - renderXStart, height - 4);
-
-            // Left & Right quiet boundary indicator dashed lines
-            ctx.strokeStyle = 'rgba(239, 68, 68, 0.25)';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([2, 4]);
-            ctx.beginPath();
-            ctx.moveTo(renderXStart, 2);
-            ctx.lineTo(renderXStart, height - 2);
-            ctx.moveTo(renderXEnd, 2);
-            ctx.lineTo(renderXEnd, height - 2);
-            ctx.stroke();
-            ctx.setLineDash([]); // Reset line dash
-
-            // Draw a micro label "〔 停頓 〕" or "靜音" inside the gap if there's enough space
-            const zoneWidth = renderXEnd - renderXStart;
-            if (zoneWidth > 45) {
-              ctx.fillStyle = 'rgba(239, 68, 68, 0.55)';
-              ctx.font = 'bold 8px system-ui, sans-serif';
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillText('〔 停頓 〕', renderXStart + zoneWidth / 2, height / 2);
-            }
-          }
-        }
-      });
-    }
-
     // 2. Draw vocal peaks soundwave bars
     for (let i = 0; i < totalBars; i++) {
       const val = visiblePeaks[i];
@@ -461,16 +372,9 @@ export default function WaveformPlot({
       const barTime = visibleStart + (i / totalBars) * visibleDuration;
       const isPastCurrent = barTime <= currentTime;
 
-      // Check if this bar qualifies as silent/quiet
-      const isSilentBar = showSilence && val <= silenceThreshold;
-
       let barColor = 'rgba(255, 255, 255, 0.15)'; // Default unplayed translucent white
 
-      if (isSilentBar) {
-        barColor = isPastCurrent 
-          ? 'rgba(248, 113, 113, 0.22)' // Dim rose outline for played silences
-          : 'rgba(255, 255, 255, 0.04)'; // Extremely faint white for quiet sections
-      } else if (pointA !== null && pointB !== null) {
+      if (pointA !== null && pointB !== null) {
         if (barTime >= pointA && barTime <= pointB) {
           barColor = isPastCurrent 
             ? '#2cb67d' // Played loop path (Emerald Green)
@@ -557,7 +461,7 @@ export default function WaveformPlot({
       ctx.fill();
     }
 
-  }, [visiblePeaks, peaks, currentTime, duration, pointA, pointB, isDecoding, audioUrl, fileName, zoom, scrollOffset, showSilence, silenceThreshold, silenceZones]);
+  }, [visiblePeaks, peaks, currentTime, duration, pointA, pointB, isDecoding, audioUrl, fileName, zoom, scrollOffset]);
 
   // Click & Drag Scrub helper
   const handleTimelineScrub = (clientX: number) => {
@@ -692,45 +596,12 @@ export default function WaveformPlot({
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs font-semibold opacity-90" style={{ color: '#fffffe' }}>
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-[#7f5af0] animate-pulse"></span>
-          <span>高解析波形分析器 (Web Audio API)</span>
-          {isDecoding && <span className="text-[10px] text-[#7f5af0] animate-pulse">(背景解碼並分析中...)</span>}
+          <span>智慧音軌波形圖</span>
+          {isDecoding && <span className="text-[10px] text-[#7f5af0] animate-pulse">(背景解碼中...)</span>}
         </div>
         
-        {/* Zoom & Silence adjustment toolbars */}
+        {/* Zoom adjustment toolbars */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Silence visualizer controls */}
-          <div className="flex items-center gap-1.5 bg-white/5 rounded-lg p-1 border border-white/10 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setShowSilence(!showSilence)}
-              className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap transition-all flex items-center gap-1 ${
-                showSilence 
-                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' 
-                  : 'bg-white/5 text-white/50 hover:text-white/80'
-              }`}
-              title="偵測並標記語句間的靜音與停頓區段"
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${showSilence ? 'bg-rose-400 animate-pulse' : 'bg-white/30'}`}></span>
-              靜音區與節奏標記: {showSilence ? '已開啟' : '已關閉'}
-            </button>
-            {showSilence && (
-              <div className="flex items-center gap-1 px-1 text-white/50">
-                <span className="text-[9px]">靈敏度:</span>
-                <input 
-                  type="range" 
-                  min="0.03" 
-                  max="0.25" 
-                  step="0.01" 
-                  value={silenceThreshold} 
-                  onChange={(e) => setSilenceThreshold(parseFloat(e.target.value))} 
-                  className="w-12 h-1 appearance-none bg-white/15 rounded cursor-pointer accent-rose-400" 
-                  title="調整靜音偵測靈敏度（數值越高判定越寬鬆）"
-                />
-                <span className="font-mono text-[9px] text-white/80 min-w-[18px]">{(silenceThreshold * 100).toFixed(0)}</span>
-              </div>
-            )}
-          </div>
-
           <div className="flex items-center gap-1.5 bg-white/5 rounded-lg p-1 border border-white/10">
             <button 
               type="button"
