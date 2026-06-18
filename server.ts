@@ -5,9 +5,11 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
 import { GoogleGenAI } from "@google/genai";
+import { createRequire } from "module";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 // Local fallback DB for massive URLs
 const DB_FILE = path.join(__dirname, "local_urls.json");
@@ -112,10 +114,16 @@ async function startServer() {
         return res.status(400).json({ error: "Missing URL parameter" });
       }
 
-      // @ts-ignore
-      const YoutubeTranscript = (await import('youtube-transcript')).YoutubeTranscript;
-      
-      const transcript = await YoutubeTranscript.fetchTranscript(url);
+      // Regex 提取正確的 11 位 YouTube Video ID
+      let videoId = url.trim();
+      const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=|shorts\/)|youtu\.be\/)([^"&?\/\s]{11})/i;
+      const match = url.match(regExp);
+      if (match && match[1]) {
+        videoId = match[1];
+      }
+
+      const { YoutubeTranscript } = require('youtube-transcript');
+      const transcript = await YoutubeTranscript.fetchTranscript(videoId);
       
       // format: [{text: "hi", duration: 1000, offset: 0}, ...]
       res.json(transcript);
