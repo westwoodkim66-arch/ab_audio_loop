@@ -1730,111 +1730,71 @@ export default function App() {
                     )}
                   </div>
                 </div>
-
-                {/* Compact Speed, Sync & Volume */}
-                <div className="hidden md:flex flex-shrink-0 flex-col items-end gap-1 px-1">
-                    <div className="flex items-center gap-4 h-full">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
-                        <div className="flex bg-white/5 rounded px-1 py-0.5 mr-1">
-                          <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">-</button>
-                          <span className="text-xs font-mono font-bold w-6 text-center">{playbackRate.toFixed(1)}</span>
-                          <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 hover:bg-white/10 rounded text-xs">+</button>
-                        </div>
-                        {/* 預設播放速度切換 */}
-                        <div className="flex gap-1">
-                          {[0.5, 0.75, 1.0].map((rate) => {
-                            const isSelected = Math.abs(playbackRate - rate) < 0.01;
-                            return (
-                              <button
-                                key={rate}
-                                onClick={() => setPlaybackRate(rate)}
-                                className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition-all hover:scale-105 active:scale-95 ${
-                                  isSelected 
-                                    ? 'text-white font-black' 
-                                    : 'text-white/60 hover:text-white/90 bg-white/5 hover:bg-white/10'
-                                }`}
-                                style={isSelected ? { backgroundColor: colors.button } : undefined}
-                                title={`${rate}x 快速練習語速`}
-                              >
-                                {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* 字幕微調控制項 (桌機版) */}
-                      <div className="flex items-center gap-1.5 border-l border-white/10 pl-3">
-                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-50" title="調整字幕與聲音的相對延遲。若高亮太慢，請增加秒數；若太快，請減少秒數。">字幕同步</span>
-                        <div className="flex bg-white/5 rounded px-1 py-0.5">
-                          <button onClick={() => setSubtitleOffset(o => Math.max(-2.0, Math.round((o - 0.05) * 20) / 20))} className="px-1 py-0.5 hover:bg-white/10 rounded text-[10px] font-mono font-bold" title="提前字幕">-0.05s</button>
-                          <span className="text-[11px] font-mono font-bold w-14 text-center" style={{ color: subtitleOffset === 0 ? colors.paragraph : subtitleOffset > 0 ? '#2cb67d' : '#ef4444' }}>
-                            {subtitleOffset >= 0 ? `+${subtitleOffset.toFixed(2)}` : subtitleOffset.toFixed(2)}s
-                          </span>
-                          <button onClick={() => setSubtitleOffset(o => Math.min(2.0, Math.round((o + 0.05) * 20) / 20))} className="px-1 py-0.5 hover:bg-white/10 rounded text-[10px] font-mono font-bold" title="延後字幕">+0.05s</button>
-                        </div>
-                        <button onClick={() => setSubtitleOffset(0.15)} className="text-[9px] bg-white/10 hover:bg-white/20 px-1 py-0.5 rounded text-white/70 hover:text-white" title="重設為預設最佳值 (0.15s)">重設</button>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 border-l border-white/10 pl-3">
-                        <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
-                        <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
-                      </div>
-                    </div>
-                </div>
               </div>
 
-              {/* Mobile-only Speed, Sync & Volume Controls */}
-              <div className="flex md:hidden flex-col gap-2 bg-white/5 rounded-lg px-2.5 py-2 border border-white/5 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">速度</span>
-                    <div className="flex bg-white/5 rounded px-1 py-0.5 mr-0.5">
-                      <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">-</button>
-                      <span className="text-xs font-mono font-bold w-6 text-center leading-normal">{playbackRate.toFixed(1)}</span>
-                      <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">+</button>
-                    </div>
-                    
-                    {/* Preset rates */}
-                    <div className="flex gap-1">
-                      {[0.5, 0.75, 1.0].map((rate) => {
-                        const isSelected = Math.abs(playbackRate - rate) < 0.01;
-                        return (
-                          <button
-                            key={rate}
-                            onClick={() => setPlaybackRate(rate)}
-                            className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition-all active:scale-95 ${
-                              isSelected 
-                                ? 'text-white font-black' 
-                                : 'text-white/60 hover:text-white/90 bg-white/5'
-                            }`}
-                            style={isSelected ? { backgroundColor: colors.button } : undefined}
-                          >
-                            {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
-                          </button>
-                        );
-                      })}
-                    </div>
+              {/* Playback Settings Panel (Speed, Subtitle Sync, Volume) placed below the Maximized progress bar */}
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white/[0.03] border border-white/5 rounded-xl p-3 sm:p-4 text-xs">
+                {/* Left: Speed Settings */}
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider opacity-60">播放速度</span>
+                  <div className="flex items-center bg-black/40 border border-white/10 rounded px-1.5 py-0.5">
+                    <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all" title="速度減少 0.1">-</button>
+                    <span className="text-xs font-mono font-bold w-7 text-center">{playbackRate.toFixed(1)}x</span>
+                    <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all" title="速度增加 0.1">+</button>
                   </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
-                    <input type="range" min="0" max="1" step="0.01" value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-16 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0" style={{ backgroundColor: colors.stroke }} />
+                  {/* Preset rates */}
+                  <div className="flex flex-wrap gap-1">
+                    {[0.5, 0.75, 1.0, 1.25, 1.5].map((rate) => {
+                      const isSelected = Math.abs(playbackRate - rate) < 0.01;
+                      return (
+                        <button
+                          key={rate}
+                          onClick={() => setPlaybackRate(rate)}
+                          className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded transition-all active:scale-95 ${
+                            isSelected 
+                              ? 'text-white font-black hover:opacity-90' 
+                              : 'text-white/50 bg-white/5 hover:text-white/90 hover:bg-white/10'
+                          }`}
+                          style={isSelected ? { backgroundColor: colors.button } : undefined}
+                          title={`${rate}x 快速練習`}
+                        >
+                          {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between border-t border-white/5 pt-2">
-                  <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">字幕同步</span>
-                  <div className="flex items-center gap-1.5">
-                    <div className="flex bg-white/5 rounded px-1 py-0.5">
-                      <button onClick={() => setSubtitleOffset(o => Math.max(-2.0, Math.round((o - 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">-0.05s</button>
-                      <span className="text-xs font-mono font-bold w-14 text-center leading-loose" style={{ color: subtitleOffset === 0 ? colors.paragraph : subtitleOffset > 0 ? '#2cb67d' : '#ef4444' }}>
+                {/* Right/Middle: Subtitle Sync and Volume */}
+                <div className="flex flex-wrap items-center gap-4 sm:gap-6 justify-between lg:justify-end">
+                  {/* Subtitle Alignment */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider opacity-60" title="調整字幕與聲音的相對延遲。若高亮太慢，請增加秒數；若太快，請減少秒數。">字幕同步</span>
+                    <div className="flex bg-black/40 border border-white/10 rounded px-1.5 py-0.5">
+                      <button onClick={() => setSubtitleOffset(o => Math.max(-2.0, Math.round((o - 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[10px] font-bold" title="提前字幕 0.05 秒">-0.05s</button>
+                      <span className="text-[11px] font-mono font-bold w-14 text-center leading-normal" style={{ color: subtitleOffset === 0 ? colors.paragraph : subtitleOffset > 0 ? '#2cb67d' : '#ef4444' }}>
                         {subtitleOffset >= 0 ? `+${subtitleOffset.toFixed(2)}` : subtitleOffset.toFixed(2)}s
                       </span>
-                      <button onClick={() => setSubtitleOffset(o => Math.min(2.0, Math.round((o + 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[11px] font-bold">+0.05s</button>
+                      <button onClick={() => setSubtitleOffset(o => Math.min(2.0, Math.round((o + 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[10px] font-bold" title="延後字幕 0.05 秒">+0.05s</button>
                     </div>
-                    <button onClick={() => setSubtitleOffset(0.15)} className="text-[10px] bg-white/10 hover:bg-white/20 px-1.5 py-0.5 rounded text-white/70 hover:text-white">重設</button>
+                    <button onClick={() => setSubtitleOffset(0.15)} className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded font-medium border border-[#7f5af0]/10 text-white/70 hover:text-white transition-all active:scale-95" title="重設為預設最佳同步值 (0.15s)">
+                      重設
+                    </button>
+                  </div>
+
+                  {/* Volume Control */}
+                  <div className="flex items-center gap-2">
+                    <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max="1" 
+                      step="0.01" 
+                      value={volume} 
+                      onChange={(e) => setVolume(parseFloat(e.target.value))} 
+                      className="w-16 sm:w-24 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0 rounded-full" 
+                      style={{ backgroundColor: colors.stroke }} 
+                    />
                   </div>
                 </div>
               </div>
