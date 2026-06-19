@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles, Scissors, Download, Edit, X, Check, GripVertical } from 'lucide-react';
+import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles, Scissors, Download, Edit, X, Check, GripVertical, Mic } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
 
@@ -262,6 +262,8 @@ export default function App() {
     color?: 'red' | 'green' | 'blue' | 'gray';
     pointA?: number;
     pointB?: number;
+    isShadowing?: boolean;
+    shadowingAudioUrl?: string;
   }
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
@@ -315,16 +317,36 @@ export default function App() {
   const [sharingUrl, setSharingUrl] = useState('');
   const [embedWidth, setEmbedWidth] = useState('100%');
   const [embedHeight, setEmbedHeight] = useState('600px');
+
+  // 麥克風跟讀錄音狀態
+  const [isRecordingShadow, setIsRecordingShadow] = useState(false);
+  const [recordingShadowDuration, setRecordingShadowDuration] = useState(0);
+  const [playingShadowId, setPlayingShadowId] = useState<string | null>(null);
+  
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<any>(null);
+  const shadowingTimeRef = useRef<number>(0);
+  const shadowingPointARef = useRef<number | null>(null);
+  const shadowingPointBRef = useRef<number | null>(null);
+  const shadowAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
   
   const clipAudioRef = useRef<HTMLAudioElement | null>(null);
   const [clipProgress, setClipProgress] = useState<Record<string, number>>({});
 
-  // 頁面卸載時銷毀 Blob URLs 與執行中的 HTML5 Audio Player
+  // 頁面卸載時銷毀 Blob URLs 與執行中的 HTML5 Audio Player 以及錄音資源
   useEffect(() => {
     return () => {
       if (clipAudioRef.current) {
         clipAudioRef.current.pause();
         clipAudioRef.current.src = "";
+      }
+      if (shadowAudioPlayerRef.current) {
+        shadowAudioPlayerRef.current.pause();
+        shadowAudioPlayerRef.current.src = "";
+      }
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
       }
       Object.values(generatedClips).forEach((clip: any) => {
         try { URL.revokeObjectURL(clip.blobUrl); } catch (e) {}
@@ -1119,6 +1141,154 @@ export default function App() {
         newList.splice(targetIndex, 0, draggedItem);
       }
       return newList;
+    });
+  };
+
+  // 開始麥克風跟讀錄音
+  const startShadowRecording = async () => {
+    if (isRecordingShadow) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingChunksRef.current = [];
+      
+      // 擷取目前的原始音訊時間點與迴圈區間
+      shadowingTimeRef.current = Math.round(currentTime * 100) / 100;
+      shadowingPointARef.current = pointA !== null ? Math.round(pointA * 100) / 100 : null;
+      shadowingPointBRef.current = pointB !== null ? Math.round(pointB * 100) / 100 : null;
+
+      let options = {};
+      // 優先使用常用的音訊容器類型
+      if (typeof MediaRecorder !== 'undefined') {
+        if (MediaRecorder.isTypeSupported('audio/webm')) {
+          options = { mimeType: 'audio/webm' };
+        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+          options = { mimeType: 'audio/ogg' };
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          options = { mimeType: 'audio/mp4' };
+        }
+      }
+
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordingChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        // 釋放麥克風軌道
+        stream.getTracks().forEach(track => track.stop());
+
+        const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        
+        // 限制檔案大小或轉成 Base64 儲存
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Data = reader.result as string;
+          const labelText = newBookmarkLabel.trim() || `🎤 跟讀錄製 @ ${formatTime(shadowingTimeRef.current)}`;
+          
+          const newB: Bookmark = {
+            id: `shadow_${Date.now()}`,
+            time: shadowingTimeRef.current,
+            label: labelText,
+            color: selectedColorForNewBookmark,
+            pointA: shadowingPointARef.current !== null ? shadowingPointARef.current : undefined,
+            pointB: shadowingPointBRef.current !== null ? shadowingPointBRef.current : undefined,
+            isShadowing: true,
+            shadowingAudioUrl: base64Data
+          };
+
+          setBookmarks(prev => {
+            const list = [...prev, newB];
+            if (bookmarkSortBy !== 'manual') {
+              return list.sort((a, b) => a.time - b.time);
+            }
+            return list;
+          });
+
+          setNewBookmarkLabel('');
+          setSuccessMessage(`跟讀書籤「${labelText}」已成功錄製並存入備忘！`);
+          setTimeout(() => setSuccessMessage(''), 3000);
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      recorder.start();
+      setIsRecordingShadow(true);
+      setRecordingShadowDuration(0);
+
+      // 設定最大 15 秒錄音保護，避免 localStorage 被灌爆
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingShadowDuration(prev => {
+          if (prev >= 14) {
+            clearInterval(recordingTimerRef.current);
+            stopShadowRecording();
+            return 15;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+
+    } catch (err: any) {
+      console.error('Failed to start recording shadow:', err);
+      setError('❌ 啟動麥克風錄音失敗：請確認是否已授權麥克風權限。');
+      setTimeout(() => setError(''), 4000);
+    }
+  };
+
+  // 停止麥克風跟讀錄音
+  const stopShadowRecording = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecordingShadow(false);
+  };
+
+  // 播放跟讀錄音
+  const playShadowAudio = (bookmark: Bookmark) => {
+    if (!bookmark.shadowingAudioUrl) return;
+
+    if (playingShadowId === bookmark.id) {
+      if (shadowAudioPlayerRef.current) {
+        shadowAudioPlayerRef.current.pause();
+      }
+      setPlayingShadowId(null);
+      return;
+    }
+
+    // 先暫停現有播放
+    if (shadowAudioPlayerRef.current) {
+      shadowAudioPlayerRef.current.pause();
+    }
+    if (playingClipId) {
+      setPlayingClipId(null);
+    }
+    if (clipAudioRef.current) {
+      clipAudioRef.current.pause();
+    }
+
+    const audio = new Audio(bookmark.shadowingAudioUrl);
+    shadowAudioPlayerRef.current = audio;
+    setPlayingShadowId(bookmark.id);
+
+    audio.onended = () => {
+      setPlayingShadowId(null);
+    };
+    audio.onerror = () => {
+      setPlayingShadowId(null);
+      setError('無法播放此錄音片段，可能格式不受此瀏覽器支援。');
+      setTimeout(() => setError(''), 3000);
+    };
+
+    audio.play().catch(e => {
+      console.error(e);
+      setPlayingShadowId(null);
     });
   };
 
@@ -2624,6 +2794,49 @@ export default function App() {
                 })}
               </div>
             </div>
+
+            {/* 錄製跟讀筆記功能區 */}
+            <div className="flex flex-col sm:flex-row gap-3 mt-3 pt-3 border-t border-white/5 justify-between items-center">
+              <div className="flex items-center gap-2">
+                <div className={`p-2 rounded-xl flex items-center justify-center transition-all ${isRecordingShadow ? 'bg-red-500/25 text-red-500 animate-pulse border border-red-500/30' : 'bg-[#7f5af0]/10 text-[#a78bfa] border border-[#7f5af0]/15'}`}>
+                  <Mic className="w-4 h-4" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[11px] font-bold text-white/95">
+                    {isRecordingShadow ? "正在錄製跟讀語音..." : "跟讀語音錄製筆記"}
+                  </span>
+                  <span className="text-[9px] text-white/45 leading-none mt-0.5">
+                    {isRecordingShadow 
+                      ? `已錄製 ${recordingShadowDuration} 秒（上限 15 秒，錄完後自動轉換成書籤）` 
+                      : "可透過麥克風隨手跟讀，自動比對並插入專屬跟讀書籤！"
+                    }
+                  </span>
+                </div>
+              </div>
+              <div className="flex-shrink-0">
+                {isRecordingShadow ? (
+                  <button
+                    type="button"
+                    onClick={stopShadowRecording}
+                    className="px-4 py-1.5 rounded-lg text-xs font-black bg-red-610 hover:bg-red-550 text-white flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all outline-none"
+                    title="結束並儲存目前的跟讀語音"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                    停止並儲存 ({recordingShadowDuration}秒)
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startShadowRecording}
+                    className="px-4 py-1.5 rounded-lg text-xs font-bold bg-[#7f5af0]/10 hover:bg-[#7f5af0]/20 border border-[#7f5af0]/35 text-[#a78bfa] flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all outline-none"
+                    title="立即錄音：按一下即開始錄音，配上目前的播放時間點"
+                  >
+                    <Mic className="w-3.5 h-3.5 text-[#a78bfa]" />
+                    開始跟讀錄音 ({formatTime(currentTime)})
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* 書籤分類與批量管理面板 */}
@@ -2836,7 +3049,11 @@ export default function App() {
                           />
                         ) : (
                           <div className="w-full h-full bg-gradient-to-br from-[#7f5af0]/20 to-[#2cb67d]/20 flex items-center justify-center">
-                            <Video className="w-3.5 h-3.5 opacity-40 text-white" />
+                            {bookmark.isShadowing ? (
+                              <Mic className="w-3.5 h-3.5 text-[#a78bfa] animate-pulse" />
+                            ) : (
+                              <Video className="w-3.5 h-3.5 opacity-40 text-white" />
+                            )}
                           </div>
                         )}
                         <div className="absolute inset-0 bg-black/20 group-hover/item:bg-black/0 transition-colors flex items-center justify-center">
@@ -2886,6 +3103,35 @@ export default function App() {
                             />
                             <span>{bColorObj.label}</span>
                           </button>
+
+                          {/* 跟讀錄音檔播放控制項 */}
+                          {bookmark.isShadowing && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                playShadowAudio(bookmark);
+                              }}
+                              className={`px-2 py-0.5 rounded text-[10px] font-black border transition-all hover:scale-105 active:scale-95 flex items-center gap-1 cursor-pointer ${
+                                playingShadowId === bookmark.id
+                                  ? 'bg-indigo-500/30 border-indigo-500 text-indigo-300'
+                                  : 'bg-indigo-500/10 hover:bg-indigo-500/20 border-indigo-500/20 text-indigo-400 font-extrabold shadow-sm animate-pulse'
+                              }`}
+                              title={playingShadowId === bookmark.id ? "暫停播送跟讀錄音" : "點擊播放您先前錄製的跟讀練習語音"}
+                            >
+                              {playingShadowId === bookmark.id ? (
+                                <>
+                                  <Pause className="w-2.5 h-2.5 animate-pulse text-indigo-300" />
+                                  <span>播放中 (跟讀記)</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Mic className="w-2.5 h-2.5 text-indigo-400" />
+                                  <span>播放跟讀筆記</span>
+                                </>
+                              )}
+                            </button>
+                          )}
 
                           {/* 「生成音訊剪輯」功能區 */}
                           {!generatedClips[bookmark.id] ? (
@@ -3035,6 +3281,7 @@ export default function App() {
               <li>• 滑鼠點擊進度條可跳轉，按住 <strong style={{ color: colors.headline }}>A/B 標記</strong> 可直接左右拖動設定範圍。</li>
               <li>• 支援時間輸入 (如 `1:15` 或 `75`) 與<strong style={{ color: colors.headline }}>快速區間</strong> (如 `1:07~1:58`、`1:07-1:58` 或 `~1:58`)；時間旁的 <strong style={{ color: colors.headline }}>+/-</strong> 可微調，<strong style={{ color: colors.button }}>長按可連續增減</strong>。</li>
               <li>• 點擊 <strong style={{ color: colors.headline }}>分享圖示 ( <Share2 className="w-3 h-3 inline" /> )</strong> 可以產生專屬連結，方便傳送給朋友或在不同裝置繼續學習。</li>
+              <li>• 使用 <strong style={{ color: colors.headline }}>跟讀語音錄製筆記</strong> 可以透過麥克風隨手錄下您的發音，自動比對並完美綁定在目前進度的書籤，隨時一鍵播放比對您的口音與原音。</li>
             </ul>
           </div>
         </div>

@@ -1,6 +1,10 @@
 {
   "name": "AB Repeat 點讀助手",
   "description": "精準控制 • 反覆練習 • 輕鬆分享 AB Repeat 點讀助手",
-  "requestFramePermissions": [],
-  "majorCapabilities": []
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
