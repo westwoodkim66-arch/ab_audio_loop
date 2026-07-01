@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Keyboard, Play, Pause, RotateCcw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles, Scissors, Download, Edit, X, Check, GripVertical, Mic } from 'lucide-react';
+import { Keyboard, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles, Scissors, Download, Edit, X, Check, GripVertical, Mic } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
 
@@ -2231,9 +2231,17 @@ export default function App() {
             <div className="flex flex-col gap-3">
               {/* Top Row: Time, Progress Bar, Play Controls */}
               <div className="flex items-center gap-4">
-                <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-12 h-12 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
-                   {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-1" />}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.max(0, currentTime - 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-9 h-9 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="倒退 3 秒">
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                  <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-12 h-12 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
+                     {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-1" />}
+                  </button>
+                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.min(duration, currentTime + 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-9 h-9 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="快轉 3 秒">
+                    <RotateCw className="w-4 h-4" />
+                  </button>
+                </div>
                 
                 <div className="flex-grow flex flex-col gap-1.5 justify-center">
                   <div className="flex justify-between items-center px-1">
@@ -2454,27 +2462,7 @@ export default function App() {
                     <span className="text-xs font-mono font-bold w-7 text-center">{playbackRate.toFixed(1)}x</span>
                     <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all" title="速度增加 0.1">+</button>
                   </div>
-                  {/* Preset rates */}
-                  <div className="flex flex-wrap gap-1">
-                    {[0.5, 0.75, 1.0, 1.25, 1.5].map((rate) => {
-                      const isSelected = Math.abs(playbackRate - rate) < 0.01;
-                      return (
-                        <button
-                          key={rate}
-                          onClick={() => setPlaybackRate(rate)}
-                          className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded transition-all active:scale-95 ${
-                            isSelected 
-                              ? 'text-white font-black hover:opacity-90' 
-                              : 'text-white/50 bg-white/5 hover:text-white/90 hover:bg-white/10'
-                          }`}
-                          style={isSelected ? { backgroundColor: colors.button } : undefined}
-                          title={`${rate}x 快速練習`}
-                        >
-                          {rate.toFixed(1) === '1.0' ? '1.0' : rate.toString()}x
-                        </button>
-                      );
-                    })}
-                  </div>
+
                 </div>
 
                 {/* Right/Middle: Subtitle Sync and Volume */}
