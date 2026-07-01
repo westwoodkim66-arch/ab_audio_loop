@@ -2105,8 +2105,8 @@ export default function App() {
         <div id="sticky-header" className="sticky top-0 z-40 border-b-2 shadow-2xl transition-all" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
           <div className="px-4 md:px-8 py-3">
             {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
-            <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg ${isVideo ? 'shadow-md h-auto opacity-100 max-h-32 md:max-h-48' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
-              <div className="relative aspect-video w-full h-full max-h-32 md:max-h-48 object-contain bg-black flex justify-center">
+            <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg mx-auto bg-black ${isVideo ? 'shadow-md opacity-100 w-full max-w-[500px] aspect-video' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
+              <div className="relative w-full h-full flex justify-center items-center">
                     {isDailymotion && dmVideoId ? (
                       <DailymotionPlayer
                         videoId={dmVideoId}
@@ -2147,6 +2147,7 @@ export default function App() {
                           playerRef.current = player;
                         }
                       }}
+                      style={{ position: 'absolute', top: 0, left: 0 }}
                       url={audioUrl}
                       playing={isPlaying}
                       volume={activeVolume}
@@ -2230,19 +2231,7 @@ export default function App() {
 
             <div className="flex flex-col gap-3">
               {/* Top Row: Time, Progress Bar, Play Controls */}
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.max(0, currentTime - 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-9 h-9 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="倒退 3 秒">
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                  <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-12 h-12 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
-                     {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-1" />}
-                  </button>
-                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.min(duration, currentTime + 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-9 h-9 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="快轉 3 秒">
-                    <RotateCw className="w-4 h-4" />
-                  </button>
-                </div>
-                
+              <div className="flex flex-col gap-3">
                 <div className="flex-grow flex flex-col gap-1.5 justify-center">
                   <div className="flex justify-between items-center px-1">
                     <span className="font-mono text-sm font-bold tracking-tight" style={{ color: colors.headline }}>{formatTime(currentTime)} <span className="opacity-40 font-normal">/ {formatTime(duration)}</span></span>
@@ -2450,56 +2439,48 @@ export default function App() {
                     </div>
                   )}
                 </div>
+
+                {/* Play Controls Row placed centrally below the progress bar */}
+                <div className="flex justify-center items-center gap-6 mt-1">
+                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.max(0, currentTime - 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="倒退 3 秒">
+                    <RotateCcw className="w-5 h-5" />
+                  </button>
+                  <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-16 h-16 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
+                     {isPlaying ? <Pause className="w-7 h-7 fill-current" /> : <Play className="w-7 h-7 fill-current ml-1.5" />}
+                  </button>
+                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.min(duration, currentTime + 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="快轉 3 秒">
+                    <RotateCw className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
 
-              {/* Playback Settings Panel (Speed, Subtitle Sync, Volume) placed below the Maximized progress bar */}
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white/[0.03] border border-white/5 rounded-xl p-3 sm:p-4 text-xs">
+              {/* Playback Settings Panel */}
+              <div className="flex items-center justify-between flex-wrap gap-4 bg-white/[0.03] border border-white/5 rounded-xl p-3 sm:p-4 text-xs">
                 {/* Left: Speed Settings */}
-                <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex items-center gap-2.5">
                   <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider opacity-60">播放速度</span>
                   <div className="flex items-center bg-black/40 border border-white/10 rounded px-1.5 py-0.5">
                     <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all" title="速度減少 0.1">-</button>
                     <span className="text-xs font-mono font-bold w-7 text-center">{playbackRate.toFixed(1)}x</span>
                     <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all" title="速度增加 0.1">+</button>
                   </div>
-
                 </div>
 
-                {/* Right/Middle: Subtitle Sync and Volume */}
-                <div className="flex flex-wrap items-center gap-4 sm:gap-6 justify-between lg:justify-end">
-                  {/* Subtitle Alignment */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider opacity-60" title="調整字幕與聲音的相對延遲。若高亮太慢，請增加秒數；若太快，請減少秒數。">字幕同步</span>
-                    <div className="flex bg-black/40 border border-white/10 rounded px-1.5 py-0.5">
-                      <button onClick={() => setSubtitleOffset(o => Math.max(-2.0, Math.round((o - 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[10px] font-bold" title="提前字幕 0.05 秒">-0.05s</button>
-                      <span className="text-[11px] font-mono font-bold w-14 text-center leading-normal" style={{ color: subtitleOffset === 0 ? colors.paragraph : subtitleOffset > 0 ? '#2cb67d' : '#ef4444' }}>
-                        {subtitleOffset >= 0 ? `+${subtitleOffset.toFixed(2)}` : subtitleOffset.toFixed(2)}s
-                      </span>
-                      <button onClick={() => setSubtitleOffset(o => Math.min(2.0, Math.round((o + 0.05) * 20) / 20))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-[10px] font-bold" title="延後字幕 0.05 秒">+0.05s</button>
-                    </div>
-                    <button onClick={() => setSubtitleOffset(0.15)} className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded font-medium border border-[#7f5af0]/10 text-white/70 hover:text-white transition-all active:scale-95" title="重設為預設最佳同步值 (0.15s)">
-                      重設
-                    </button>
-                  </div>
-
-                  {/* Volume Control */}
-                  <div className="flex items-center gap-2">
-                    <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
-                    <input 
-                      type="range" 
-                      min="0" 
-                      max="1" 
-                      step="0.01" 
-                      value={volume} 
-                      onChange={(e) => setVolume(parseFloat(e.target.value))} 
-                      className="w-16 sm:w-24 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0 rounded-full" 
-                      style={{ backgroundColor: colors.stroke }} 
-                    />
-                  </div>
+                {/* Right: Volume */}
+                <div className="flex items-center gap-2">
+                  <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="1" 
+                    step="0.01" 
+                    value={volume} 
+                    onChange={(e) => setVolume(parseFloat(e.target.value))} 
+                    className="w-16 sm:w-24 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0 rounded-full" 
+                    style={{ backgroundColor: colors.stroke }} 
+                  />
                 </div>
               </div>
-
-
 
               {/* 當前 A/B 循環區間對應的字幕名稱與建議 */}
               {pointA !== null && pointB !== null && (
@@ -2618,15 +2599,17 @@ export default function App() {
                     <input type="text" value={rangeInput} onChange={(e) => setRangeInput(e.target.value)} onBlur={applyRange} onKeyDown={(e) => e.key === 'Enter' && applyRange()} placeholder="A~B" className="w-14 text-center font-mono text-[11px] bg-transparent outline-none border-b border-white/20 focus:border-white/50 transition-colors pb-0" />
                   </div>
 
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="checkbox" checked={isRepeatEnabled} onChange={(e) => setIsRepeatEnabled(e.target.checked)} className="w-4 h-4 sm:w-3 sm:h-3 accent-[#7f5af0]" />
-                    <span className={`text-sm sm:text-xs font-bold ${isRepeatEnabled ? 'text-white' : 'opacity-50'}`}>循環</span>
-                  </label>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={isRepeatEnabled} onChange={(e) => setIsRepeatEnabled(e.target.checked)} className="w-4 h-4 sm:w-3 sm:h-3 accent-[#7f5af0]" />
+                      <span className={`text-sm sm:text-xs font-bold ${isRepeatEnabled ? 'text-white' : 'opacity-50'}`}>循環</span>
+                    </label>
 
-                  <label className="flex items-center gap-1.5 cursor-pointer" title="自動循環增強：超出 B 點時極短淡出再跳回 A 點，聽力練習流暢不刺耳">
-                    <input type="checkbox" checked={isLoopFadeEnabled} onChange={(e) => setIsLoopFadeEnabled(e.target.checked)} className="w-4 h-4 sm:w-3 sm:h-3 accent-[#7f5af0]" />
-                    <span className={`text-sm sm:text-xs font-bold ${isLoopFadeEnabled ? 'text-white' : 'opacity-50'}`}>淡出循環</span>
-                  </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer" title="自動循環增強：超出 B 點時極短淡出再跳回 A 點，聽力練習流暢不刺耳">
+                      <input type="checkbox" checked={isLoopFadeEnabled} onChange={(e) => setIsLoopFadeEnabled(e.target.checked)} className="w-4 h-4 sm:w-3 sm:h-3 accent-[#7f5af0]" />
+                      <span className={`text-sm sm:text-xs font-bold ${isLoopFadeEnabled ? 'text-white' : 'opacity-50'}`}>淡出循環</span>
+                    </label>
+                  </div>
 
                   <div className="flex items-center justify-end gap-1.5 sm:border-l sm:border-white/10 sm:pl-3 ml-auto sm:ml-0">
                     <button onClick={clearAB} title="清除標記" className="p-2 sm:p-1.5 hover:bg-white/10 rounded transition-colors text-red-400 group flex items-center justify-center bg-black/20 sm:bg-transparent"><Trash2 className="w-4 h-4 opacity-70 group-hover:opacity-100" /></button>
