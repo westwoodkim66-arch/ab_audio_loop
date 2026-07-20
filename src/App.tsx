@@ -584,7 +584,19 @@ export default function App() {
         if (playerRef.current) {
           const delta = e.code === 'ArrowLeft' ? -5 : 5;
           const baseTime = targetSeekRef.current !== null ? targetSeekRef.current : currentPos;
-          let newTime = Math.max(0, baseTime + delta);
+          let newTime = baseTime + delta;
+          if (pointA !== null && pointB !== null && baseTime >= pointA && baseTime <= pointB) {
+            if (newTime < pointA) {
+              newTime = pointA;
+            } else if (newTime >= pointB) {
+              if (isRepeatEnabled) {
+                newTime = pointA;
+              } else {
+                newTime = pointB;
+              }
+            }
+          }
+          newTime = Math.max(0, newTime);
           if (stateRef.current.duration) {
             newTime = Math.min(newTime, stateRef.current.duration);
           }
@@ -855,6 +867,36 @@ export default function App() {
     }
   }, [duration]);
 
+  const handleRelativeSeek = useCallback((delta: number) => {
+    if (!playerRef.current) return;
+    const baseTime = targetSeekRef.current !== null ? targetSeekRef.current : currentTime;
+    let newTime = baseTime + delta;
+
+    if (pointA !== null && pointB !== null && baseTime >= pointA && baseTime <= pointB) {
+      if (newTime < pointA) {
+        newTime = pointA;
+      } else if (newTime >= pointB) {
+        if (isRepeatEnabled) {
+          newTime = pointA;
+        } else {
+          newTime = pointB;
+        }
+      }
+    }
+
+    newTime = Math.max(0, newTime);
+    if (duration) {
+      newTime = Math.min(newTime, duration);
+    }
+
+    targetSeekRef.current = newTime;
+    playerRef.current.seekTo(newTime, 'seconds');
+
+    if (seekClearTimer.current) clearTimeout(seekClearTimer.current);
+    seekClearTimer.current = setTimeout(() => {
+      targetSeekRef.current = null;
+    }, 500);
+  }, [currentTime, duration, pointA, pointB, isRepeatEnabled]);
   const jumpToAndPlay = (targetTime: number | null) => {
     if (targetTime !== null && playerRef.current) {
       playerRef.current.seekTo(targetTime, 'seconds');
@@ -2442,13 +2484,13 @@ export default function App() {
 
                 {/* Play Controls Row placed centrally below the progress bar */}
                 <div className="flex justify-center items-center gap-6 mt-1">
-                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.max(0, currentTime - 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="倒退 3 秒">
+                  <button onClick={() => handleRelativeSeek(-3)} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="倒退 3 秒">
                     <RotateCcw className="w-5 h-5" />
                   </button>
                   <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-16 h-16 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
                      {isPlaying ? <Pause className="w-7 h-7 fill-current" /> : <Play className="w-7 h-7 fill-current ml-1.5" />}
                   </button>
-                  <button onClick={() => { if (playerRef.current) playerRef.current.seekTo(Math.min(duration, currentTime + 3), 'seconds'); }} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="快轉 3 秒">
+                  <button onClick={() => handleRelativeSeek(3)} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="快轉 3 秒">
                     <RotateCw className="w-5 h-5" />
                   </button>
                 </div>
@@ -2567,66 +2609,70 @@ export default function App() {
                 </div>
               )}
 
-              {/* Bottom Row: A/B Controls (Compact) */}
-              <div className="flex flex-col md:flex-row items-center justify-between gap-3 bg-white/5 rounded-lg px-3 py-3 md:py-2 border border-white/5 overflow-hidden">
-                
-                {/* A & B Group */}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 md:gap-3 w-full md:w-auto">
+              {/* Bottom Row: A/B Controls */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2 bg-[#16161a] rounded-xl p-2.5 border border-white/10 shadow-lg w-full">
+                  
+                {/* Left Group: Point A and Point B Inputs */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full lg:w-auto">
                   {/* Point A Input */}
-                  <div className="flex items-center justify-between sm:justify-center gap-1.5 bg-black/40 rounded px-2 py-1.5 sm:px-1.5 sm:py-1 border border-white/10 w-full sm:w-auto">
-                    <span className="text-[10px] font-black opacity-50 sm:hidden ml-1">起點 A</span>
-                    <span className="text-[10px] hidden sm:inline font-black opacity-50">A</span>
+                  <div className="flex items-center gap-1.5 bg-[#121214] rounded-lg px-2 py-1 border border-white/5 w-full sm:w-auto justify-between sm:justify-start">
+                    <span className="text-xs font-black text-white/50 ml-0.5 select-none w-3">A</span>
                     <div className="flex items-center gap-1">
-                      <button {...getHoldHandlers('A', -0.1)} className="hover:bg-white/20 rounded p-1 sm:p-0.5"><Minus className="w-3 h-3 opacity-70" /></button>
-                      <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00" className="w-14 sm:w-11 text-center font-mono text-[11px] bg-transparent outline-none" />
-                      <button {...getHoldHandlers('A', 0.1)} className="hover:bg-white/20 rounded p-1 sm:p-0.5"><Plus className="w-3 h-3 opacity-70" /></button>
-                      <button onClick={setA} className="ml-1 sm:ml-0.5 text-[11px] sm:text-[10px] bg-white/10 hover:bg-white/20 rounded px-2 py-1 sm:px-1.5 sm:py-0.5 transition-colors whitespace-nowrap">設為當前</button>
+                      <button {...getHoldHandlers('A', -0.1)} className="hover:bg-white/10 text-white/50 hover:text-white rounded p-0.5 transition-colors" title="微調減少 A"><Minus className="w-3.5 h-3.5" /></button>
+                      <input type="text" value={inputA} onChange={(e) => setInputA(e.target.value)} onBlur={applyInputA} onKeyDown={(e) => e.key === 'Enter' && applyInputA()} placeholder="00:00.0" className="w-14 text-center font-mono text-[13px] font-bold bg-transparent outline-none border-none focus:ring-0 p-0" style={{ color: '#8cb1e3' }} />
+                      <button {...getHoldHandlers('A', 0.1)} className="hover:bg-white/10 text-white/50 hover:text-white rounded p-0.5 transition-colors" title="微調增加 A"><Plus className="w-3.5 h-3.5" /></button>
+                      <button onClick={setA} className="ml-1 text-[11px] bg-[#252529] hover:bg-[#2e2e33] text-white/70 hover:text-white rounded px-2 py-1 transition-all whitespace-nowrap font-bold border border-white/5 shadow-sm active:scale-95">設為當前</button>
                     </div>
                   </div>
 
                   {/* Point B Input */}
-                  <div className="flex items-center justify-between sm:justify-center gap-1.5 bg-[#7f5af0]/10 sm:bg-black/40 rounded px-2 py-1.5 sm:px-1.5 sm:py-1 border border-[#7f5af0]/30 sm:border-white/10 w-full sm:w-auto">
-                    <span className="text-[10px] font-black sm:hidden ml-1" style={{ color: colors.button }}>終點 B</span>
-                    <span className="text-[10px] hidden sm:inline font-black" style={{ color: colors.button }}>B</span>
+                  <div className="flex items-center gap-1.5 bg-[#121214] rounded-lg px-2 py-1 border border-[#7f5af0]/15 w-full sm:w-auto justify-between sm:justify-start">
+                    <span className="text-xs font-black select-none w-3" style={{ color: colors.button }}>B</span>
                     <div className="flex items-center gap-1">
-                      <button {...getHoldHandlers('B', -0.1)} className="hover:bg-white/20 rounded p-1 sm:p-0.5"><Minus className="w-3 h-3 opacity-70" /></button>
-                      <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00" className="w-14 sm:w-11 text-center font-mono text-[11px] bg-transparent outline-none" style={{ color: colors.button }} />
-                      <button {...getHoldHandlers('B', 0.1)} className="hover:bg-white/20 rounded p-1 sm:p-0.5"><Plus className="w-3 h-3 opacity-70" /></button>
-                      <button onClick={setB} className="ml-1 sm:ml-0.5 text-[11px] sm:text-[10px] rounded px-2 py-1 sm:px-1.5 sm:py-0.5 transition-colors whitespace-nowrap" style={{ backgroundColor: colors.button, color: colors.buttonText }}>設為當前</button>
+                      <button {...getHoldHandlers('B', -0.1)} className="hover:bg-white/10 text-white/50 hover:text-white rounded p-0.5 transition-colors" title="微調減少 B"><Minus className="w-3.5 h-3.5" /></button>
+                      <input type="text" value={inputB} onChange={(e) => setInputB(e.target.value)} onBlur={applyInputB} onKeyDown={(e) => e.key === 'Enter' && applyInputB()} placeholder="00:00.0" className="w-14 text-center font-mono text-[13px] font-bold bg-transparent outline-none border-none focus:ring-0 p-0" style={{ color: colors.button }} />
+                      <button {...getHoldHandlers('B', 0.1)} className="hover:bg-white/10 text-white/50 hover:text-white rounded p-0.5 transition-colors" title="微調增加 B"><Plus className="w-3.5 h-3.5" /></button>
+                      <button onClick={setB} className="ml-1 text-[11px] rounded px-2 py-1 transition-all whitespace-nowrap font-bold shadow-sm active:scale-95 hover:opacity-90" style={{ backgroundColor: colors.button, color: colors.buttonText }}>設為當前</button>
                     </div>
                   </div>
                 </div>
 
-                {/* Range, Repeat, and Actions Group */}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between md:justify-end gap-3 md:gap-3 w-full md:w-auto mt-2 md:mt-0">
-                  <div className="flex items-center justify-between sm:justify-center gap-2 sm:gap-1 bg-black/40 rounded px-2 py-1.5 sm:px-1.5 sm:py-1 border border-white/10 w-full sm:w-auto">
-                    <span className="text-[11px] sm:text-[10px] font-black opacity-50 whitespace-nowrap ml-1 sm:ml-0">快速區間</span>
-                    <input type="text" value={rangeInput} onChange={(e) => setRangeInput(e.target.value)} onBlur={applyRange} onKeyDown={(e) => e.key === 'Enter' && applyRange()} placeholder="A~B" className="w-14 sm:w-12 text-center font-mono text-[11px] bg-transparent outline-none border-b border-white/20 focus:border-white/50 transition-colors pb-0" />
+                {/* Center Group: Range Input and Checkboxes */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full lg:w-auto">
+                  {/* Range Input */}
+                  <div className="flex items-center gap-1.5 bg-[#121214] rounded-lg px-2.5 py-1 border border-white/5 w-full sm:w-auto justify-between sm:justify-start">
+                    <span className="text-xs font-bold text-white/40 whitespace-nowrap ml-0.5">快速區間</span>
+                    <div className="flex items-center">
+                      <input type="text" value={rangeInput} onChange={(e) => setRangeInput(e.target.value)} onBlur={applyRange} onKeyDown={(e) => e.key === 'Enter' && applyRange()} placeholder="A~B" className="w-13 text-center font-mono text-xs text-white/80 bg-transparent outline-none border-b border-white/20 focus:border-white/50 transition-colors pb-0.5 p-0" />
+                    </div>
                   </div>
 
-                  <div className="flex flex-row items-center justify-between sm:justify-end gap-2 w-full sm:w-auto px-1 sm:px-0">
-                    <div className="flex items-center gap-4 sm:gap-3">
-                      <label className="flex items-center gap-1.5 sm:gap-1 cursor-pointer">
-                        <input type="checkbox" checked={isRepeatEnabled} onChange={(e) => setIsRepeatEnabled(e.target.checked)} className="w-4 h-4 sm:w-3 sm:h-3 accent-[#7f5af0]" />
-                        <span className={`text-sm sm:text-[10px] font-bold whitespace-nowrap ${isRepeatEnabled ? 'text-white' : 'opacity-50'}`}>循環</span>
-                      </label>
+                  {/* Options Group (Repeat, LoopFade) */}
+                  <div className="flex items-center gap-3 justify-start">
+                    <label className="flex items-center gap-1.5 cursor-pointer group select-none">
+                      <input type="checkbox" checked={isRepeatEnabled} onChange={(e) => setIsRepeatEnabled(e.target.checked)} className="w-3.5 h-3.5 rounded text-[#7f5af0] bg-[#121214] border-white/10 focus:ring-0 focus:ring-offset-0 accent-[#7f5af0] cursor-pointer" />
+                      <span className={`text-xs font-black whitespace-nowrap transition-colors ${isRepeatEnabled ? 'text-white' : 'text-white/50 group-hover:text-white/80'}`}>循環</span>
+                    </label>
 
-                      <label className="flex items-center gap-1.5 sm:gap-1 cursor-pointer" title="自動循環增強：超出 B 點時極短淡出再跳回 A 點，聽力練習流暢不刺耳">
-                        <input type="checkbox" checked={isLoopFadeEnabled} onChange={(e) => setIsLoopFadeEnabled(e.target.checked)} className="w-4 h-4 sm:w-3 sm:h-3 accent-[#7f5af0]" />
-                        <span className={`text-sm sm:text-[10px] font-bold whitespace-nowrap ${isLoopFadeEnabled ? 'text-white' : 'opacity-50'}`}>淡出</span>
-                      </label>
-                    </div>
-
-                    <div className="flex items-center justify-end gap-2 sm:gap-1 sm:border-l sm:border-white/10 sm:pl-2">
-                      <button onClick={clearAB} title="清除標記" className="p-2 sm:p-1.5 hover:bg-white/10 rounded transition-colors text-red-400 group flex items-center justify-center bg-black/20 sm:bg-transparent"><Trash2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 opacity-70 group-hover:opacity-100" /></button>
-                      <button onClick={handleShare} title="產生分享連結" className="p-2 sm:p-1.5 hover:bg-white/10 rounded transition-colors group flex items-center justify-center bg-black/20 sm:bg-transparent"><Share2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 opacity-70 group-hover:opacity-100" /></button>
-                    </div>
+                    <label className="flex items-center gap-1.5 cursor-pointer group select-none" title="自動循環增強：超出 B 點時極短淡出再跳回 A 點，聽力練習流暢不刺耳">
+                      <input type="checkbox" checked={isLoopFadeEnabled} onChange={(e) => setIsLoopFadeEnabled(e.target.checked)} className="w-3.5 h-3.5 rounded text-[#7f5af0] bg-[#121214] border-white/10 focus:ring-0 focus:ring-offset-0 accent-[#7f5af0] cursor-pointer" />
+                      <span className={`text-xs font-black whitespace-nowrap transition-colors ${isLoopFadeEnabled ? 'text-white' : 'text-white/50 group-hover:text-white/80'}`}>淡出</span>
+                    </label>
                   </div>
                 </div>
+
+                {/* Right Group: Actions Separator, Trash, and Share */}
+                <div className="flex items-center gap-2.5 ml-auto lg:ml-0">
+                  <div className="hidden lg:block w-px h-5 bg-white/10"></div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={clearAB} title="清除標記" className="hover:bg-red-500/10 rounded p-1 transition-colors text-red-400/80 hover:text-red-400 group flex items-center justify-center"><Trash2 className="w-4 h-4" /></button>
+                    <button onClick={handleShare} title="產生分享連結" className="hover:bg-white/10 rounded p-1 transition-colors group flex items-center justify-center text-white/60 hover:text-white"><Share2 className="w-4 h-4" /></button>
+                  </div>
+                </div>
+
               </div>
             </div>
           </div>
-
         {/* 書籤紀錄與重點標記 */}
         <div className="mx-8 md:mx-12 mb-8 p-6 rounded-2xl border border-white/5 bg-white/[0.02]" style={{ borderColor: colors.stroke }}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 border-b border-white/5 pb-4">
