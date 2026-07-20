@@ -1825,6 +1825,16 @@ export default function App() {
     setRangeInput('');
   };
 
+  // 當載入新的音檔、影片或 YouTube 連結時，自動清除上一部資源所設定的 A/B 點，防止自動播放問題
+  const isFirstLoadRef = useRef(true);
+  useEffect(() => {
+    if (isFirstLoadRef.current) {
+      isFirstLoadRef.current = false;
+      return;
+    }
+    clearAB();
+  }, [audioUrl, uploadedFile]);
+
 
 
   const Player = ReactPlayer as any;
@@ -2482,17 +2492,45 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Play Controls Row placed centrally below the progress bar */}
-                <div className="flex justify-center items-center gap-6 mt-1">
-                  <button onClick={() => handleRelativeSeek(-3)} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="倒退 3 秒">
-                    <RotateCcw className="w-5 h-5" />
-                  </button>
-                  <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-16 h-16 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
-                     {isPlaying ? <Pause className="w-7 h-7 fill-current" /> : <Play className="w-7 h-7 fill-current ml-1.5" />}
-                  </button>
-                  <button onClick={() => handleRelativeSeek(3)} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="快轉 3 秒">
-                    <RotateCw className="w-5 h-5" />
-                  </button>
+                {/* Play Controls Row incorporating speed and volume */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-2 px-1 w-full">
+                  {/* Left: Speed Settings */}
+                  <div className="flex items-center gap-2.5 flex-shrink-0 order-2 sm:order-1 w-full sm:w-auto justify-center sm:justify-start">
+                    <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider opacity-60">播放速度</span>
+                    <div className="flex items-center bg-black/40 border border-white/10 rounded px-1.5 py-0.5">
+                      <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all text-white/70 hover:text-white" title="速度減少 0.1">-</button>
+                      <span className="text-xs font-mono font-bold w-7 text-center text-white/90">{playbackRate.toFixed(1)}x</span>
+                      <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all text-white/70 hover:text-white" title="速度增加 0.1">+</button>
+                    </div>
+                  </div>
+
+                  {/* Center: Play Controls */}
+                  <div className="flex justify-center items-center gap-6 order-1 sm:order-2">
+                    <button onClick={() => handleRelativeSeek(-3)} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="倒退 3 秒">
+                      <RotateCcw className="w-5 h-5" />
+                    </button>
+                    <button onClick={togglePlay} className="flex-shrink-0 aspect-square w-16 h-16 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-md" style={{ backgroundColor: colors.button, color: colors.buttonText }}>
+                       {isPlaying ? <Pause className="w-7 h-7 fill-current" /> : <Play className="w-7 h-7 fill-current ml-1.5" />}
+                    </button>
+                    <button onClick={() => handleRelativeSeek(3)} className="flex-shrink-0 aspect-square w-11 h-11 rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all bg-white/5 hover:bg-white/10 text-white shadow-sm border border-white/5" title="快轉 3 秒">
+                      <RotateCw className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Right: Volume */}
+                  <div className="flex items-center gap-2 flex-shrink-0 order-3 w-full sm:w-auto justify-center sm:justify-end">
+                    <Volume2 className="w-4 h-4 opacity-50 flex-shrink-0 text-white" />
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max="1" 
+                      step="0.01" 
+                      value={volume} 
+                      onChange={(e) => setVolume(parseFloat(e.target.value))} 
+                      className="w-20 sm:w-28 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0 rounded-full" 
+                      style={{ backgroundColor: colors.stroke }} 
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2501,33 +2539,7 @@ export default function App() {
 
         <div className="px-4 md:px-8 pb-3">
           <div className="flex flex-col gap-3">
-              {/* Playback Settings Panel */}
-              <div className="flex items-center justify-between flex-wrap gap-4 bg-white/[0.03] border border-white/5 rounded-xl p-3 sm:p-4 text-xs">
-                {/* Left: Speed Settings */}
-                <div className="flex items-center gap-2.5">
-                  <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider opacity-60">播放速度</span>
-                  <div className="flex items-center bg-black/40 border border-white/10 rounded px-1.5 py-0.5">
-                    <button onClick={() => setPlaybackRate(v => Math.max(0.1, v - 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all" title="速度減少 0.1">-</button>
-                    <span className="text-xs font-mono font-bold w-7 text-center">{playbackRate.toFixed(1)}x</span>
-                    <button onClick={() => setPlaybackRate(v => Math.min(3.0, v + 0.1))} className="px-1.5 py-0.5 hover:bg-white/10 rounded text-xs font-bold transition-all" title="速度增加 0.1">+</button>
-                  </div>
-                </div>
 
-                {/* Right: Volume */}
-                <div className="flex items-center gap-2">
-                  <Volume2 className="w-3.5 h-3.5 opacity-50 flex-shrink-0" />
-                  <input 
-                    type="range" 
-                    min="0" 
-                    max="1" 
-                    step="0.01" 
-                    value={volume} 
-                    onChange={(e) => setVolume(parseFloat(e.target.value))} 
-                    className="w-16 sm:w-24 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0 rounded-full" 
-                    style={{ backgroundColor: colors.stroke }} 
-                  />
-                </div>
-              </div>
 
               {/* 當前 A/B 循環區間對應的字幕名稱與建議 */}
               {pointA !== null && pointB !== null && (
