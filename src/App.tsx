@@ -137,6 +137,16 @@ export default function App() {
     if (typeof window === 'undefined') return { url: '', a: null, b: null, t: '' };
     const searchParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+
+    // 自有網域分享路徑：
+    // /d/影片ID/A點/B點（Dailymotion）
+    // /y/影片ID/A點/B點（YouTube）
+    // /v/影片ID/A點/B點（Vimeo）
+    const pathType = pathParts[0]?.toLowerCase();
+    const pathMediaId = pathParts[1] ? decodeURIComponent(pathParts[1]) : '';
+    const pathA = pathParts[2] ? decodeURIComponent(pathParts[2]) : null;
+    const pathB = pathParts[3] ? decodeURIComponent(pathParts[3]) : null;
     
     let urlParam = searchParams.get('url') || hashParams.get('url') || searchParams.get('u') || hashParams.get('u');
     const vParam = searchParams.get('v') || hashParams.get('v');
@@ -149,10 +159,16 @@ export default function App() {
       urlParam = `https://vimeo.com/${vmParam}`;
     } else if (dmParam) {
       urlParam = `https://www.dailymotion.com/video/${dmParam}`;
+    } else if (pathType === 'd' && /^[a-zA-Z0-9]+$/.test(pathMediaId)) {
+      urlParam = `https://www.dailymotion.com/video/${pathMediaId}`;
+    } else if (pathType === 'y' && /^[a-zA-Z0-9_-]+$/.test(pathMediaId)) {
+      urlParam = `https://www.youtube.com/watch?v=${pathMediaId}`;
+    } else if (pathType === 'v' && /^\d+$/.test(pathMediaId)) {
+      urlParam = `https://vimeo.com/${pathMediaId}`;
     }
 
-    const aParam = searchParams.get('a') || hashParams.get('a');
-    const bParam = searchParams.get('b') || hashParams.get('b');
+    const aParam = searchParams.get('a') || hashParams.get('a') || pathA;
+    const bParam = searchParams.get('b') || hashParams.get('b') || pathB;
     const tParam = searchParams.get('t') || hashParams.get('t') || '';
 
     return {
@@ -1900,35 +1916,41 @@ export default function App() {
       }
     }
 
-    let finalOrigin = window.location.origin.replace('ais-dev-', 'ais-pre-');
-    // 解碼掉 params.toString() 中不必要的 %3A (:) 與 %2F (/) 讓網址看起來更直觀短小
+    const finalOrigin = window.location.origin.replace('ais-dev-', 'ais-pre-');
+    const roundedA = pointA !== null ? Math.round(pointA).toString() : '';
+    const roundedB = pointB !== null ? Math.round(pointB).toString() : '';
+    const timePath = roundedA
+      ? `/${roundedA}${roundedB ? `/${roundedB}` : ''}`
+      : '';
+
+    // 已知影片平台使用本站自己的簡短路徑，不再經過 Reurl 或其他短網址服務。
+    let sharePath = '';
+    if (ytMatch && ytMatch[1]) {
+      sharePath = `/y/${encodeURIComponent(ytMatch[1])}${timePath}`;
+    } else if (vmMatch && vmMatch[1]) {
+      sharePath = `/v/${encodeURIComponent(vmMatch[1])}${timePath}`;
+    } else if (dmMatch && dmMatch[1]) {
+      sharePath = `/d/${encodeURIComponent(dmMatch[1])}${timePath}`;
+    }
+
+    // 字幕資料可能很長，仍放在 hash 中；沒有字幕時網址就是乾淨的短路徑。
+    const transcriptHash = params.get('t')
+      ? `#t=${params.get('t')}`
+      : '';
+    // 一般媒體網址無法在沒有資料庫的情況下縮成固定短 ID，因此保留舊格式，
+    // 但同樣使用本站網址且不經過任何第三方服務。
     const decodedHash = params.toString().replace(/%3A/g, ':').replace(/%2F/g, '/');
-    let finalUrl = `${finalOrigin}${window.location.pathname}#${decodedHash}`;
+    let finalUrl = sharePath
+      ? `${finalOrigin}${sharePath}${transcriptHash}`
+      : `${finalOrigin}/#${decodedHash}`;
 
     try {
-      const url = new URL(window.location.href);
-      url.search = ""; 
-      url.hash = decodedHash;
-      window.history.replaceState(null, '', url.toString());
+      window.history.replaceState(null, '', finalUrl);
     } catch (e) {
       console.warn('History replace failed');
     }
 
-    setSuccessMessage('正在產生連結...');
-
-    // 呼叫後端 API 進行短網址轉換
-    try {
-      const res = await fetch("/api/shorten", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: finalUrl })
-      });
-      if (res.ok) {
-        finalUrl = await res.text();
-      }
-    } catch(e) {
-      // 網路錯誤，維持原本的長網址
-    }
+    setSuccessMessage('正在產生本站分享連結...');
 
     try {
       await navigator.clipboard.writeText(finalUrl);

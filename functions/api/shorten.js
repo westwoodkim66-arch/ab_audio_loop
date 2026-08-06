@@ -1,6 +1,5 @@
-const REURL_API_ENDPOINT = "https://api.reurl.cc/shorten";
-const REURL_SHORT_URL_PREFIX = "https://reurl.cc/";
-
+// 相容舊版前端的端點。
+// 新版 App.tsx 已直接產生本站 /d、/y、/v 分享路徑，不再呼叫任何第三方短網址 API。
 function textResponse(text, status = 200) {
   return new Response(text, {
     status,
@@ -22,66 +21,12 @@ function isHttpUrl(value) {
 
 export async function onRequestPost(context) {
   const body = await context.request.json().catch(() => ({}));
-  const longUrl = typeof body?.url === "string" ? body.url.trim() : "";
+  const url = typeof body?.url === "string" ? body.url.trim() : "";
 
-  // 無效輸入不送往 Reurl，並維持前端原本「回傳原內容」的相容行為。
-  if (!isHttpUrl(longUrl)) {
-    return textResponse(longUrl);
+  if (!isHttpUrl(url)) {
+    return textResponse("Invalid URL", 400);
   }
 
-  // 請在 Cloudflare Pages 的環境變數中設定此金鑰，不要寫死在原始碼。
-  const apiKey = String(context.env?.REURL_API_KEY || "").trim();
-  if (!apiKey) {
-    console.error("Reurl shortening skipped: REURL_API_KEY is not configured.");
-    return textResponse(longUrl);
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-  try {
-    const response = await fetch(REURL_API_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "reurl-api-key": apiKey,
-      },
-      body: JSON.stringify({ url: longUrl }),
-      signal: controller.signal,
-    });
-
-    const data = await response.json().catch(() => null);
-    const shortUrl = typeof data?.short_url === "string"
-      ? data.short_url.trim()
-      : "";
-
-    // Reurl 成功時會回傳 res=success 與 short_url。
-    if (
-      response.ok &&
-      data?.res === "success" &&
-      shortUrl.startsWith(REURL_SHORT_URL_PREFIX) &&
-      isHttpUrl(shortUrl)
-    ) {
-      return textResponse(shortUrl);
-    }
-
-    console.error("Reurl API rejected the shortening request.", {
-      status: response.status,
-      code: data?.code,
-      message: data?.msg || data?.err,
-    });
-  } catch (error) {
-    console.error(
-      error?.name === "AbortError"
-        ? "Reurl API request timed out."
-        : "Reurl API request failed.",
-      error,
-    );
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  // Reurl 暫時不可用時，仍讓分享功能回傳原始網址，不再改用會跳確認頁的服務。
-  return textResponse(longUrl);
+  // 不經過 Reurl、TinyURL、is.gd 或 da.gd，避免任何第三方確認頁。
+  return textResponse(url);
 }
