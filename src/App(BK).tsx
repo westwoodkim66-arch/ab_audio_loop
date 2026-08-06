@@ -2162,7 +2162,6 @@ export default function App() {
                     {isDailymotion && dmVideoId ? (
                       <DailymotionPlayer
                         videoId={dmVideoId}
-                        initialTime={pointA}
                         playing={isPlaying}
                         volume={activeVolume}
                         playbackRate={playbackRate}
@@ -2181,6 +2180,12 @@ export default function App() {
                         onReady={() => {
                           if (lastLoadedUrl.current === audioUrl) return;
                           lastLoadedUrl.current = audioUrl;
+                          const searchParams = new URLSearchParams(window.location.search);
+                          const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                          const aParam = searchParams.get('a') || hashParams.get('a');
+                          if (aParam && playerRef.current) {
+                            setTimeout(() => playerRef.current.seekTo(parseFloat(aParam), 'seconds'), 500);
+                          }
                           setError('');
                           setSuccessMessage('影片載入成功！');
                           setTimeout(() => setSuccessMessage(''), 3000);

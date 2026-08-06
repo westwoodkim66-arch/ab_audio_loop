@@ -9,7 +9,6 @@ declare global {
 
 interface DailymotionPlayerProps {
   videoId: string;
-  initialTime?: number | null;
   playing: boolean;
   volume: number;
   playbackRate: number;
@@ -76,7 +75,6 @@ const loadDailymotionSDK = (): Promise<any> => {
 
 export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
   videoId,
-  initialTime,
   playing,
   volume,
   playbackRate,
@@ -90,24 +88,11 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
   const dmPlayerInstance = useRef<any>(null);
   const pollingRef = useRef<number | null>(null);
   const isReadyRef = useRef(false);
-  const initialTimeRef = useRef(initialTime);
-  const playingRef = useRef(playing);
   const containerId = useRef(`dm-player-${videoId}-${Math.random().toString(36).slice(2, 9)}`);
-
-  useEffect(() => {
-    initialTimeRef.current = initialTime;
-  }, [initialTime]);
-
-  useEffect(() => {
-    playingRef.current = playing;
-  }, [playing]);
 
   // 初始化 player（僅在 videoId 變更時）
   useEffect(() => {
     let active = true;
-    let readyCompleted = false;
-    let applyingInitialPosition = false;
-    let readyRetryTimer: number | null = null;
     isReadyRef.current = false;
 
     const init = async () => {
@@ -146,79 +131,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
         const EVT_TIME = EVT.VIDEO_TIMECHANGE || EVT.PLAYER_TIMEUPDATE || 'timeupdate';
         const EVT_DURATION = EVT.VIDEO_DURATIONCHANGE || EVT.PLAYER_DURATIONCHANGE || 'durationchange';
         const EVT_END = EVT.VIDEO_END || EVT.PLAYER_ENDED || 'end';
-        const EVT_CRITICAL_READY = EVT.PLAYER_CRITICALPATHREADY || 'player_criticalpathready';
-        const EVT_VIDEO_CHANGE = EVT.PLAYER_VIDEOCHANGE || 'player_videochange';
-
-        // Dailymotion 的 createPlayer Promise 完成，只代表 Player 物件已建立，
-        // 不代表影片已經可以 seek。必須等影片 duration / critical path 可用，
-        // 先套用 A 點並確認成功，再開放播放。
-        const completeReadyAtInitialPosition = async (retriesLeft = 40) => {
-          if (!active || readyCompleted || applyingInitialPosition) return;
-          applyingInitialPosition = true;
-
-          try {
-            let state: any = null;
-            if (typeof player.getState === 'function') {
-              state = await player.getState();
-            }
-
-            const availableDuration = state?.videoDuration ?? state?.duration ?? 0;
-            if (!(availableDuration > 0)) {
-              throw new Error('Dailymotion video is not seekable yet');
-            }
-
-            const requestedTime = initialTimeRef.current;
-            const targetTime = typeof requestedTime === 'number' && Number.isFinite(requestedTime)
-              ? Math.max(0, Math.min(requestedTime, availableDuration))
-              : 0;
-
-            // 防止影片先從 0 秒播出，再延遲跳到 A 點。
-            try { await Promise.resolve(player.pause()); } catch(e){}
-
-            if (targetTime > 0 && typeof player.seek === 'function') {
-              await Promise.resolve(player.seek(targetTime));
-
-              // 某些瀏覽器會在媒體尚未完全就緒時悄悄忽略第一次 seek。
-              // 稍候讀回狀態；若仍在開頭，交由下面的 retry 再試。
-              await new Promise(resolve => window.setTimeout(resolve, 100));
-              if (typeof player.getState === 'function') {
-                const verifiedState = await player.getState();
-                const verifiedTime = verifiedState?.videoTime ?? verifiedState?.currentTime;
-                if (typeof verifiedTime === 'number' && Math.abs(verifiedTime - targetTime) > 1.5) {
-                  throw new Error('Dailymotion initial seek was not applied');
-                }
-              }
-            }
-
-            if (!active) return;
-            readyCompleted = true;
-            isReadyRef.current = true;
-            onProgress({ playedSeconds: targetTime });
-            onReady();
-
-            // 只有在 A 點已套用後才開始播放，避免第一幀從 0 秒開始。
-            if (playingRef.current) {
-              try { await Promise.resolve(player.play()); } catch(e){}
-            }
-          } catch(e) {
-            if (active && retriesLeft > 0) {
-              readyRetryTimer = window.setTimeout(
-                () => completeReadyAtInitialPosition(retriesLeft - 1),
-                100
-              );
-            } else if (active) {
-              // 即使極慢網路下無法驗證 seek，也要讓使用者可操作播放器。
-              readyCompleted = true;
-              isReadyRef.current = true;
-              onReady();
-              if (playingRef.current) {
-                try { await Promise.resolve(player.play()); } catch(playError){}
-              }
-            }
-          } finally {
-            applyingInitialPosition = false;
-          }
-        };
+        const EVT_READY = EVT.PLAYER_READY || 'ready';
 
         // 註冊事件
         player.on(EVT_TIME, (state: any) => {
@@ -229,11 +142,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
         player.on(EVT_DURATION, (state: any) => {
           const d = state?.videoDuration ?? state?.duration ?? player.state?.videoDuration ?? player.state?.duration;
           if (typeof d === 'number' && d > 0) onDuration(d);
-          completeReadyAtInitialPosition();
         });
-
-        player.on(EVT_CRITICAL_READY, () => completeReadyAtInitialPosition());
-        player.on(EVT_VIDEO_CHANGE, () => completeReadyAtInitialPosition());
 
         player.on(EVT_END, () => {
           onEnded();
@@ -302,8 +211,15 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
           };
         }
 
-        // 避免事件在 listener 註冊前已經發生；主動檢查直到影片可 seek。
-        completeReadyAtInitialPosition();
+        isReadyRef.current = true;
+        onReady();
+
+        // ready 後若 playing=true 就播放
+        if (playing) {
+          setTimeout(() => {
+            try { player.play(); } catch(e){}
+          }, 100);
+        }
 
       } catch (err) {
         console.error('Dailymotion init failed:', err);
@@ -314,10 +230,6 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
 
     return () => {
       active = false;
-      if (readyRetryTimer !== null) {
-        clearTimeout(readyRetryTimer);
-        readyRetryTimer = null;
-      }
       isReadyRef.current = false;
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
