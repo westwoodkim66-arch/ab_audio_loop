@@ -17,59 +17,42 @@ function isHttpUrl(value) {
   }
 }
 
-function getTinyUrlError(data, status) {
-  const message = data?.errors?.[0]?.message
-    || data?.error?.message
-    || data?.message;
-  return typeof message === "string" && message.trim()
-    ? message.trim()
-    : `TinyURL API 錯誤（HTTP ${status}）`;
-}
-
 export async function onRequestPost(context) {
   const body = await context.request.json().catch(() => ({}));
-  const url = typeof body?.url === "string" ? body.url.trim() : "";
+  const longUrl = typeof body?.url === "string" ? body.url.trim() : "";
 
-  if (!isHttpUrl(url)) {
+  if (!isHttpUrl(longUrl)) {
     return jsonResponse({ error: "無效的分享網址" }, 400);
-  }
-
-  const apiToken = typeof context.env.TINYURL_API_TOKEN === "string"
-    ? context.env.TINYURL_API_TOKEN.trim()
-    : "";
-  if (!apiToken) {
-    return jsonResponse({ error: "尚未設定 Cloudflare 加密變數：TINYURL_API_TOKEN" }, 503);
   }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
-    const response = await fetch("https://api.tinyurl.com/create", {
-      method: "POST",
+    // 使用 TinyURL 舊版免 Token 端點。encodeURIComponent 只用在送往
+    // TinyURL 的 query string，不會改寫實際要分享的 AB Loop 網址。
+    const endpoint = `https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`;
+    const response = await fetch(endpoint, {
+      method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Accept": "text/plain",
       },
-      body: JSON.stringify({
-        url,
-        domain: "tinyurl.com",
-      }),
       signal: controller.signal,
     });
 
-    const data = await response.json().catch(() => ({}));
+    const responseText = (await response.text()).trim();
     if (!response.ok) {
-      return jsonResponse({ error: getTinyUrlError(data, response.status) }, response.status);
+      return jsonResponse({ error: `TinyURL API 錯誤（HTTP ${response.status}）` }, 502);
     }
 
-    const shortUrl = data?.data?.tiny_url;
-    if (typeof shortUrl !== "string" || !/^https:\/\/(?:www\.)?tinyurl\.com\/[A-Za-z0-9_-]+$/i.test(shortUrl)) {
-      return jsonResponse({ error: "TinyURL API 未回傳有效的短網址" }, 502);
+    if (!/^https?:\/\/(?:www\.)?tinyurl\.com\/[A-Za-z0-9_-]+\/?$/i.test(responseText)) {
+      const detail = responseText && responseText.length <= 120
+        ? `：${responseText}`
+        : "";
+      return jsonResponse({ error: `TinyURL 未回傳有效的短網址${detail}` }, 502);
     }
 
-    return jsonResponse({ shortUrl, provider: "tinyurl" });
+    return jsonResponse({ shortUrl: responseText, provider: "tinyurl-legacy" });
   } catch (error) {
     const message = error?.name === "AbortError"
       ? "TinyURL API 連線逾時"
