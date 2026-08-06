@@ -108,6 +108,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
     let readyCompleted = false;
     let applyingInitialPosition = false;
     let readyRetryTimer: number | null = null;
+    const readyDeadline = Date.now() + 30000;
     isReadyRef.current = false;
 
     const init = async () => {
@@ -152,7 +153,15 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
         // Dailymotion 的 createPlayer Promise 完成，只代表 Player 物件已建立，
         // 不代表影片已經可以 seek。必須等影片 duration / critical path 可用，
         // 先套用 A 點並確認成功，再開放播放。
-        const completeReadyAtInitialPosition = async (retriesLeft = 40) => {
+        const scheduleReadyRetry = () => {
+          if (!active || readyCompleted || readyRetryTimer !== null) return;
+          readyRetryTimer = window.setTimeout(() => {
+            readyRetryTimer = null;
+            completeReadyAtInitialPosition();
+          }, 200);
+        };
+
+        const completeReadyAtInitialPosition = async () => {
           if (!active || readyCompleted || applyingInitialPosition) return;
           applyingInitialPosition = true;
 
@@ -163,7 +172,8 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
             }
 
             const availableDuration = state?.videoDuration ?? state?.duration ?? 0;
-            if (!(availableDuration > 0)) {
+            const criticalPathReady = state?.playerIsCriticalPathReady;
+            if (!(availableDuration > 0) || criticalPathReady === false) {
               throw new Error('Dailymotion video is not seekable yet');
             }
 
@@ -172,19 +182,16 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
               ? Math.max(0, Math.min(requestedTime, availableDuration))
               : 0;
 
-            // 防止影片先從 0 秒播出，再延遲跳到 A 點。
-            try { await Promise.resolve(player.pause()); } catch(e){}
-
             if (targetTime > 0 && typeof player.seek === 'function') {
               await Promise.resolve(player.seek(targetTime));
 
               // 某些瀏覽器會在媒體尚未完全就緒時悄悄忽略第一次 seek。
               // 稍候讀回狀態；若仍在開頭，交由下面的 retry 再試。
-              await new Promise(resolve => window.setTimeout(resolve, 100));
+              await new Promise(resolve => window.setTimeout(resolve, 150));
               if (typeof player.getState === 'function') {
                 const verifiedState = await player.getState();
                 const verifiedTime = verifiedState?.videoTime ?? verifiedState?.currentTime;
-                if (typeof verifiedTime === 'number' && Math.abs(verifiedTime - targetTime) > 1.5) {
+                if (typeof verifiedTime !== 'number' || Math.abs(verifiedTime - targetTime) > 2) {
                   throw new Error('Dailymotion initial seek was not applied');
                 }
               }
@@ -201,13 +208,10 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
               try { await Promise.resolve(player.play()); } catch(e){}
             }
           } catch(e) {
-            if (active && retriesLeft > 0) {
-              readyRetryTimer = window.setTimeout(
-                () => completeReadyAtInitialPosition(retriesLeft - 1),
-                100
-              );
-            } else if (active) {
-              // 即使極慢網路下無法驗證 seek，也要讓使用者可操作播放器。
+            if (active && Date.now() < readyDeadline) {
+              scheduleReadyRetry();
+            } else if (active && !readyCompleted) {
+              // 30 秒後仍無法取得可跳轉狀態時才解除鎖定，避免永久卡死。
               readyCompleted = true;
               isReadyRef.current = true;
               onReady();
@@ -270,7 +274,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
               }
             }
           } catch(e){}
-        }, 100);
+        }, 250);
 
         // 把 player 介面注入 playerRef 給外部使用
         if (playerRef) {

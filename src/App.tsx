@@ -170,7 +170,11 @@ export default function App() {
     let finalFileName = '';
     let finalPointA = params.a;
     let finalPointB = params.b;
-    let autoPlay = !!params.url;
+    // Dailymotion 的 Player SDK 在有聲音時通常需要使用者手勢才能播放。
+    // 若一開始就把 React 狀態設成「播放中」，實際播放器仍停在起始畫面，
+    // 使用者第一次按中央按鈕反而會觸發 pause，造成看似一直卡住。
+    const isInitialDailymotion = /(?:dailymotion\.com\/(?:video|embed\/video)\/|dai\.ly\/)/i.test(finalUrl || '');
+    let autoPlay = !!params.url && !isInitialDailymotion;
 
     if (!finalUrl && typeof localStorage !== 'undefined') {
       try {
