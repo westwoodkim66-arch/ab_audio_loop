@@ -2247,11 +2247,8 @@ export default function App() {
                       onReady={() => {
                         if (lastLoadedUrl.current === audioUrl) return;
                         lastLoadedUrl.current = audioUrl;
-                        const searchParams = new URLSearchParams(window.location.search);
-                        const hashParams = new URLSearchParams(window.location.hash.slice(1));
-                        const aParam = searchParams.get('a') || hashParams.get('a');
-                        if (aParam && playerRef.current) {
-                          playerRef.current.seekTo(parseFloat(aParam), 'seconds');
+                        if (pointA !== null && playerRef.current) {
+                          playerRef.current.seekTo(pointA, 'seconds');
                         }
                         setError('');
                         setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
