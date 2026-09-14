@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Keyboard, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles, Scissors, Download, Edit, X, Check, GripVertical, Mic } from 'lucide-react';
+import { Keyboard, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles, Scissors, Download, Edit, X, Check, GripVertical, Mic, Zap } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
 
@@ -246,6 +246,7 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
   const [activeVolume, setActiveVolume] = useState(1);
+  const [isVolumeBoostEnabled, setIsVolumeBoostEnabled] = useState(false);
   const isFadingRef = useRef(false);
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [pointA, setPointA] = useState<number | null>(initialData.pointA);
@@ -464,6 +465,11 @@ export default function App() {
   const activeLine = activeLineIndex !== -1 ? transcriptLines[activeLineIndex] : null;
 
   const playerRef = useRef<any>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const volumeBoostSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const volumeBoostGainRef = useRef<GainNode | null>(null);
+  const volumeBoostCompressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const volumeBoostElementRef = useRef<HTMLMediaElement | null>(null);
   const progressBarRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -483,6 +489,34 @@ export default function App() {
     if (!audioUrl) return false;
     return audioUrl.includes('dailymotion.com') || audioUrl.includes('dai.ly');
   }, [audioUrl]);
+
+  const isVolumeBoostAvailable = useMemo(() => {
+    if (!audioUrl) return false;
+    // 第三方 iframe 的音軌不會暴露給外層網頁；直接音訊／影片檔則可使用 Web Audio。
+    return !/(?:youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|dai\.ly|twitch\.tv|facebook\.com|soundcloud\.com|mixcloud\.com)/i.test(audioUrl);
+  }, [audioUrl]);
+
+  useEffect(() => {
+    // 換檔時先恢復正常增益，避免使用者誤以為新來源也已完成增益處理。
+    setIsVolumeBoostEnabled(false);
+    const gain = volumeBoostGainRef.current;
+    const context = audioContextRef.current;
+    if (gain && context && context.state !== 'closed') {
+      gain.gain.setValueAtTime(1, context.currentTime);
+    }
+  }, [audioUrl]);
+
+  useEffect(() => {
+    return () => {
+      try { volumeBoostSourceRef.current?.disconnect(); } catch {}
+      try { volumeBoostGainRef.current?.disconnect(); } catch {}
+      try { volumeBoostCompressorRef.current?.disconnect(); } catch {}
+      const context = audioContextRef.current;
+      if (context && context.state !== 'closed') {
+        void context.close();
+      }
+    };
+  }, []);
 
   const dmVideoId = useMemo(() => {
     if (!audioUrl) return null;
@@ -1623,6 +1657,74 @@ export default function App() {
     }
   }, [currentTime, pointA, pointB, isRepeatEnabled, isLoopFadeEnabled, volume]);
 
+  const toggleVolumeBoost = async () => {
+    if (!audioUrl) {
+      setSuccessMessage('請先載入音檔或影片');
+      setTimeout(() => setSuccessMessage(''), 2500);
+      return;
+    }
+
+    if (!isVolumeBoostAvailable) {
+      setSuccessMessage('此嵌入式播放器受瀏覽器限制，無法提升到 100% 以上');
+      setTimeout(() => setSuccessMessage(''), 3500);
+      return;
+    }
+
+    try {
+      const internalPlayer = playerRef.current?.getInternalPlayer?.();
+      if (!(internalPlayer instanceof HTMLMediaElement)) {
+        throw new Error('播放器尚未準備完成，請先播放一次再開啟增益');
+      }
+
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error('此瀏覽器不支援音量增益');
+      }
+
+      let context = audioContextRef.current;
+      if (!context || context.state === 'closed') {
+        context = new AudioContextClass() as AudioContext;
+        audioContextRef.current = context;
+
+        const gain = context.createGain();
+        const compressor = context.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-6, context.currentTime);
+        compressor.knee.setValueAtTime(12, context.currentTime);
+        compressor.ratio.setValueAtTime(4, context.currentTime);
+        compressor.attack.setValueAtTime(0.003, context.currentTime);
+        compressor.release.setValueAtTime(0.25, context.currentTime);
+        gain.connect(compressor);
+        compressor.connect(context.destination);
+        volumeBoostGainRef.current = gain;
+        volumeBoostCompressorRef.current = compressor;
+      }
+
+      if (volumeBoostElementRef.current !== internalPlayer) {
+        try { volumeBoostSourceRef.current?.disconnect(); } catch {}
+        const source = context.createMediaElementSource(internalPlayer);
+        source.connect(volumeBoostGainRef.current!);
+        volumeBoostSourceRef.current = source;
+        volumeBoostElementRef.current = internalPlayer;
+      }
+
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
+
+      const nextEnabled = !isVolumeBoostEnabled;
+      const targetGain = nextEnabled ? 2 : 1;
+      volumeBoostGainRef.current!.gain.cancelScheduledValues(context.currentTime);
+      volumeBoostGainRef.current!.gain.setTargetAtTime(targetGain, context.currentTime, 0.015);
+      setIsVolumeBoostEnabled(nextEnabled);
+      setSuccessMessage(nextEnabled ? '⚡ 音量增益已開啟（2×）' : '音量增益已關閉');
+      setTimeout(() => setSuccessMessage(''), 2500);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '無法啟用音量增益';
+      setSuccessMessage(`⚠️ ${message}`);
+      setTimeout(() => setSuccessMessage(''), 3500);
+    }
+  };
+
   const togglePlay = () => {
     if (!audioUrl) return;
     if (!isPlaying) {
@@ -2591,6 +2693,25 @@ export default function App() {
                       className="w-20 sm:w-28 h-1 appearance-none cursor-pointer accent-[#7f5af0] flex-shrink-0 rounded-full" 
                       style={{ backgroundColor: colors.stroke }} 
                     />
+                    <button
+                      type="button"
+                      onClick={toggleVolumeBoost}
+                      aria-pressed={isVolumeBoostEnabled}
+                      title={isVolumeBoostAvailable ? 'Boost volume（音量增益 2×）' : '此嵌入式播放器無法提升到 100% 以上'}
+                      className={`relative flex items-center justify-center gap-1 h-8 px-2.5 rounded-md border transition-all active:scale-95 ${
+                        isVolumeBoostEnabled
+                          ? 'bg-[#7f5af0] border-[#9f86ff] text-white shadow-[0_0_12px_rgba(127,90,240,0.45)]'
+                          : isVolumeBoostAvailable
+                            ? 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10 hover:text-white'
+                            : 'bg-white/[0.03] border-white/[0.06] text-white/30'
+                      }`}
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <Zap className={`w-3 h-3 ${isVolumeBoostEnabled ? 'fill-current' : ''}`} />
+                      <span className="text-[10px] font-bold tracking-wide">
+                        {isVolumeBoostEnabled ? '2×' : 'BOOST'}
+                      </span>
+                    </button>
                   </div>
                 </div>
               </div>
