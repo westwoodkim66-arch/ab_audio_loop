@@ -94,121 +94,58 @@ async function startServer() {
   // API 路由：獲取 YouTube 字幕
   app.get("/api/yt-transcript", async (req, res) => {
     try {
-      const url = req.query.url as string;
-      if (!url) {
-        return res.status(400).json({ error: "Missing URL parameter" });
+      const apiKey = process.env.SUPADATA_API_KEY;
+      if (!apiKey) {
+        return res.status(503).json({ error: "SUPADATA_NOT_CONFIGURED", message: "字幕服務尚未設定，請加入 SUPADATA_API_KEY。" });
       }
 
-      // Regex 提取正確的 11 位 YouTube Video ID
-      let videoId = url.trim();
-      const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=|shorts\/)|youtu\.be\/)([^"&?\/\s]{11})/i;
-      const match = url.match(regExp);
-      if (match && match[1]) {
-        videoId = match[1];
+      const jobId = typeof req.query.jobId === "string" ? req.query.jobId : "";
+      const videoUrl = typeof req.query.url === "string" ? req.query.url : "";
+      if (!jobId && !videoUrl) {
+        return res.status(400).json({ error: "INVALID_YOUTUBE_URL", message: "請先載入有效的 YouTube 網址。" });
       }
 
-      try {
-        console.log(`Attempting to fetch transcript directly with library for video: ${videoId}`);
-        const { YoutubeTranscript } = require('youtube-transcript');
-        const transcript = await YoutubeTranscript.fetchTranscript(videoId);
-        return res.json(transcript);
-      } catch (innerError: any) {
-        console.warn("Direct YoutubeTranscript.fetchTranscript failed, attempting fallback parsing from watch page...", innerError.message);
-        
-        // Let's do our OWN clean fetch from watch page with a modern User Agent as fallback!
-        try {
-          const ytRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-            }
-          });
-          
-          if (ytRes.ok) {
-            const html = await ytRes.text();
-            
-            // Look for captions block inside ytInitialPlayerResponse
-            const parseInlineJson = (e: string, t: string) => {
-              let n = `${t} = `, r = e.indexOf(n);
-              if (r === -1) return null;
-              let i = r + n.length, a = 0;
-              for (let t = i; t < e.length; t++) {
-                if (e[t] === `{`) a++;
-                else if (e[t] === `}` && (a--, a === 0)) {
-                  try {
-                    return JSON.parse(e.slice(i, t + 1));
-                  } catch (err) {
-                    return null;
-                  }
-                }
-              }
-              return null;
-            };
-            
-            const playerResponse = parseInlineJson(html, 'ytInitialPlayerResponse');
-            
-            if (playerResponse) {
-              console.log(`Bypass parser playabilityStatus:`, playerResponse.playabilityStatus?.status);
-              
-              if (playerResponse.playabilityStatus?.status === 'LOGIN_REQUIRED') {
-                return res.status(403).json({
-                  error: "LOGIN_REQUIRED",
-                  message: "此影片受到 YouTube 登入限制或年齡限制（Bot 偵測安全防護）。",
-                  videoId
-                });
-              }
-              
-              if (playerResponse.captions) {
-                const captionTracks = playerResponse.captions.playerCaptionsTracklistRenderer?.captionTracks;
-                if (captionTracks && captionTracks.length > 0) {
-                  // Find Chinese, or fallback to English, or fallback to first track
-                  const track = captionTracks.find((t: any) => t.languageCode === 'zh-TW' || t.languageCode === 'zh') || captionTracks[0];
-                  console.log(`Downloading track via fallback: ${track.languageCode} (${track.baseUrl})`);
-                  
-                  const trackRes = await fetch(track.baseUrl);
-                  if (trackRes.ok) {
-                    const xmlText = await trackRes.text();
-                    
-                    // Parse xml into [{text, duration, offset}]
-                    const lines: any[] = [];
-                    const regex = /<text start="([\d.]+)" dur="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/gi;
-                    let m;
-                    while ((m = regex.exec(xmlText)) !== null) {
-                      const startRaw = parseFloat(m[1]);
-                      const durRaw = parseFloat(m[2]);
-                      let rawText = m[3]
-                        .replace(/&amp;/g, '&')
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&quot;/g, '"')
-                        .replace(/&#39;/g, "'")
-                        .replace(/<[^>]*>/g, ''); // strip XML tags
-                      
-                      lines.push({
-                        text: rawText,
-                        duration: Math.round(durRaw * 1000),
-                        offset: Math.round(startRaw * 1000)
-                      });
-                    }
-                    
-                    if (lines.length > 0) {
-                      console.log(`Successfully extracted ${lines.length} lines via custom crawler fallback!`);
-                      return res.json(lines);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        } catch (fallbackError: any) {
-          console.error("Custom tracker fallback failed:", fallbackError.message);
-        }
-        
-        throw innerError;
+      const endpoint = jobId
+        ? `https://api.supadata.ai/v1/transcript/${encodeURIComponent(jobId)}`
+        : `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(videoUrl)}&mode=native`;
+      const upstream = await fetch(endpoint, { headers: { "x-api-key": apiKey, "Accept": "application/json" } });
+      const data: any = await upstream.json().catch(() => ({}));
+
+      if (!upstream.ok) {
+        const messages: Record<number, string> = {
+          401: "字幕服務金鑰無效，請重新設定 SUPADATA_API_KEY。",
+          402: "字幕服務目前沒有可用額度，請檢查 Supadata 方案。",
+          404: "這部影片沒有可用的 YouTube 字幕。",
+          429: "字幕讀取次數暫時達到上限，請稍後再試。",
+        };
+        return res.status(upstream.status >= 500 ? 502 : upstream.status).json({
+          error: data.error || "TRANSCRIPT_SERVICE_ERROR",
+          message: messages[upstream.status] || data.message || data.details || "字幕服務無法處理這部影片。",
+        });
       }
+
+      if (upstream.status === 202 || data.jobId || data.status === "queued" || data.status === "active") {
+        return res.status(202).json({ status: data.status || "queued", jobId: data.jobId });
+      }
+      if (data.status === "failed") {
+        return res.status(502).json({ error: "TRANSCRIPT_JOB_FAILED", message: data.error?.message || "字幕處理失敗。" });
+      }
+
+      const transcript = Array.isArray(data.content)
+        ? data.content.filter((item: any) => typeof item?.text === "string" && item.text.trim())
+        : [];
+      if (transcript.length === 0) {
+        return res.status(404).json({ error: "NO_CAPTIONS", message: "這部影片沒有可用的 YouTube 字幕。" });
+      }
+      return res.json({
+        transcript,
+        language: data.lang || transcript[0]?.lang || "",
+        availableLanguages: Array.isArray(data.availableLangs) ? data.availableLangs : [],
+        provider: "supadata",
+      });
     } catch (error: any) {
-      console.error("Youtube Transcript error:", error);
-      res.status(500).json({ error: error.message || "Failed to fetch transcript" });
+      console.error("Supadata Transcript error:", error);
+      res.status(502).json({ error: "TRANSCRIPT_SERVICE_UNAVAILABLE", message: "目前無法連線字幕服務，請稍後再試。" });
     }
   });
 
