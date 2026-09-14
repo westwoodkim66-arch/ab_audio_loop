@@ -47,63 +47,48 @@ async function startServer() {
     }
   });
 
-  // API 路由：Proxy 短網址請求 (使用 Reurl.cc 服務)
+  // API 路由：使用 TinyURL 免 Token 端點建立短網址。
   app.post("/api/shorten", async (req, res) => {
-    const url = req.body.url as string;
-    if (!url) {
-      return res.status(400).json({ error: "Missing URL parameter" });
+    const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return res.status(400).json({ error: "無效的分享網址" });
+      }
+    } catch {
+      return res.status(400).json({ error: "無效的分享網址" });
     }
 
     try {
-      // 優先使用使用者指定的 Reurl API
-      const reurlApiKey = "4070ff49d794e43715573b663c974755ecd7b132999204df8a38b58d65165567c4f5d6";
-      const response = await fetch("https://api.reurl.cc/shorten", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "reurl-api-key": reurlApiKey
-        },
-        body: JSON.stringify({ url })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.short_url) {
-          return res.send(data.short_url);
+      const response = await fetch(
+        `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`,
+        { headers: { "Accept": "text/plain" } }
+      );
+      const shortUrl = (await response.text()).trim();
+      if (
+        response.ok
+        && /^https?:\/\/(?:www\.)?tinyurl\.com\/[A-Za-z0-9_-]+\/?$/i.test(shortUrl)
+      ) {
+        if (shortUrl.length >= url.length) {
+          return res.json({
+            shortUrl: url,
+            provider: "original",
+            shortened: false,
+            reason: "TinyURL 回傳網址沒有比較短",
+          });
         }
-      }
-      console.warn("Reurl API failed", await response.text());
-    } catch (error) {
-      console.error("Reurl API error:", error);
-    }
-
-    // 若 Reurl 失效，提供備援選項
-    const providers = [
-      `https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`,
-      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`
-    ];
-
-    for (const providerUrl of providers) {
-      try {
-        const response = await fetch(providerUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
-          }
+        return res.json({
+          shortUrl,
+          provider: "tinyurl-legacy",
+          shortened: true,
+          originalLength: url.length,
+          shortLength: shortUrl.length,
         });
-        
-        if (response.ok) {
-          const shortUrl = (await response.text()).trim();
-          if (shortUrl.startsWith('http')) {
-            return res.send(shortUrl);
-          }
-        }
-      } catch (error) {}
+      }
+      return res.status(502).json({ error: "TinyURL 未回傳有效的短網址" });
+    } catch {
+      return res.status(502).json({ error: "目前無法連線 TinyURL API" });
     }
-
-    // 終極備援：如果外部 API 全面失敗或網址實在太長被拒絕，使用內部儲存！
-    const origin = req.headers.origin || req.protocol + '://' + req.get('host');
-    const localShort = saveLocalUrl(url, origin);
-    return res.send(localShort);
   });
 
   // API 路由：獲取 YouTube 字幕

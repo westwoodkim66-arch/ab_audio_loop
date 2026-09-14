@@ -52,7 +52,22 @@ export async function onRequestPost(context) {
       return jsonResponse({ error: `TinyURL 未回傳有效的短網址${detail}` }, 502);
     }
 
-    return jsonResponse({ shortUrl: responseText, provider: "tinyurl-legacy" });
+    if (responseText.length >= longUrl.length) {
+      return jsonResponse({
+        shortUrl: longUrl,
+        provider: "original",
+        shortened: false,
+        reason: "TinyURL 回傳網址沒有比較短",
+      });
+    }
+
+    return jsonResponse({
+      shortUrl: responseText,
+      provider: "tinyurl-legacy",
+      shortened: true,
+      originalLength: longUrl.length,
+      shortLength: responseText.length,
+    });
   } catch (error) {
     const message = error?.name === "AbortError"
       ? "TinyURL API 連線逾時"

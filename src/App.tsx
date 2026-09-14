@@ -1895,8 +1895,8 @@ export default function App() {
       // 一般網址改用 'u' 參數，並且剝除可能多餘的 query 字串以節省長度
       try {
         const cleanUrl = new URL(audioUrl);
-        // 保留乾淨的基礎網址
-        params.set('u', cleanUrl.origin + cleanUrl.pathname);
+        // 先解開網址中既有的百分比編碼，避免 URLSearchParams 再次把 % 變成 %25。
+        params.set('u', decodeURI(cleanUrl.origin + cleanUrl.pathname));
       } catch (e) {
         // 如果不是有效 URL 則原樣放入
         params.set('u', audioUrl);
@@ -1937,12 +1937,57 @@ export default function App() {
     const transcriptHash = params.get('t')
       ? `#t=${params.get('t')}`
       : '';
-    // 一般媒體網址無法在沒有資料庫的情況下縮成固定短 ID，因此保留舊格式，
-    // 但同樣使用本站網址且不經過任何第三方服務。
+    // 一般媒體先建立可完整還原媒體與 A/B 點的網址，再視長度交給 TinyURL。
     const decodedHash = params.toString().replace(/%3A/g, ':').replace(/%2F/g, '/');
     let finalUrl = sharePath
       ? `${finalOrigin}${sharePath}${transcriptHash}`
       : `${finalOrigin}/#${decodedHash}`;
+    let shortenWarning = '';
+
+    // 以不含 A/B 點的 YouTube 自有短路徑作為「本站短網址」長度基準。
+    // YouTube ID 固定為 11 碼，所以不必寫死任何特定影片 ID。
+    const nativeShortUrlLength = `${finalOrigin}/y/${'x'.repeat(11)}`.length;
+    const shouldUseTinyUrl = !sharePath && audioUrl.length > nativeShortUrlLength;
+
+    // 一般 MP3／MP4 若原始網址比本站標準短路徑更長，才呼叫 TinyURL。
+    if (shouldUseTinyUrl) {
+      setSuccessMessage('正在產生 TinyURL 短連結...');
+      try {
+        const response = await fetch('/api/shorten', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: finalUrl })
+        });
+        // 同時相容新版 JSON 回傳與舊版純文字 shorten.js。
+        const responseText = await response.text();
+        let result: { shortUrl?: string; error?: string } = {};
+        try {
+          result = JSON.parse(responseText);
+        } catch {
+          result = { shortUrl: responseText.trim() };
+        }
+        if (
+          !response.ok
+          || typeof result.shortUrl !== 'string'
+          || !/^https?:\/\/(?:www\.)?tinyurl\.com\/[A-Za-z0-9_-]+\/?$/i.test(result.shortUrl)
+        ) {
+          throw new Error(result.error || 'TinyURL 未回傳有效的短網址');
+        }
+        const tinyUrl = result.shortUrl.trim();
+        if (tinyUrl.length >= finalUrl.length) {
+          throw new Error('TinyURL 回傳網址沒有比較短');
+        }
+        finalUrl = tinyUrl;
+      } catch (err) {
+        console.warn('TinyURL 建立失敗，改用已修正編碼的完整分享網址：', err);
+        const reason = err instanceof Error ? err.message : 'TinyURL 服務暫時無法使用';
+        shortenWarning = `⚠️ ${reason}，已改用完整分享網址`;
+      }
+    } else if (!sharePath) {
+      console.info(
+        `略過 TinyURL：原始網址 ${audioUrl.length} 字，本站短路徑基準 ${nativeShortUrlLength} 字`
+      );
+    }
 
     try {
       window.history.replaceState(null, '', finalUrl);
@@ -1950,13 +1995,11 @@ export default function App() {
       console.warn('History replace failed');
     }
 
-    setSuccessMessage('正在產生本站分享連結...');
-
     try {
       await navigator.clipboard.writeText(finalUrl);
-      setSuccessMessage('🔗 分享與嵌入對話框已開啟！');
+      setSuccessMessage(shortenWarning || '🔗 分享與嵌入對話框已開啟！');
     } catch (err) {
-      setSuccessMessage('🔗 連結產生成功！');
+      setSuccessMessage(shortenWarning || '🔗 連結產生成功！');
     }
     setSharingUrl(finalUrl);
     setShowShareModal(true);
