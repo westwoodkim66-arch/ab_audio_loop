@@ -361,27 +361,50 @@ ${JSON.stringify(chunk)}
     setShowCopyPasteGuide(false);
     
     try {
-      const res = await fetch(`/api/yt-transcript?url=${encodeURIComponent(audioUrl)}`);
-      
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        if (res.status === 403 || errData.error === "LOGIN_REQUIRED") {
-          throw new Error("此影片受到 YouTube 隱私/年齡限制或安全防禦阻擋，請使用下方的「手動貼上/複製字幕教學」！");
+      const parseResponse = async (res: Response) => {
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok && res.status !== 202) {
+          throw new Error(payload.message || payload.error || "無可用字幕或發生錯誤");
         }
-        throw new Error(errData.error || "無可用字幕或發生錯誤");
+        return payload;
+      };
+
+      let res = await fetch(`/api/yt-transcript?url=${encodeURIComponent(audioUrl)}`);
+      let data = await parseResponse(res);
+
+      if (res.status === 202) {
+        const jobId = data.jobId;
+        if (!jobId) throw new Error("字幕服務已接受請求，但未回傳工作編號");
+
+        let completed = false;
+        for (let attempt = 1; attempt <= 20; attempt++) {
+          setStatusText(`字幕處理中，請稍候...（${attempt}/20）`);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          res = await fetch(`/api/yt-transcript?jobId=${encodeURIComponent(jobId)}`);
+          data = await parseResponse(res);
+          if (res.status !== 202) {
+            completed = true;
+            break;
+          }
+        }
+        if (!completed) throw new Error("字幕處理時間較長，請稍後重新按一次「讀取 YT 字幕」");
+      }
+
+      const transcript = Array.isArray(data) ? data : (data.transcript || data.content);
+      if (!Array.isArray(transcript) || transcript.length === 0) {
+        throw new Error("這部影片沒有可用的 YouTube 字幕");
       }
       
-      const data = await res.json();
-      
       // format to match prompt mapping
-      const mapped = data.map((d: any, idx: number) => ({
+      const mapped = transcript.map((d: any, idx: number) => ({
         id: `yt_${idx}`,
         originalText: d.text,
         startTime: d.offset / 1000,
         endTime: (d.offset + d.duration) / 1000
       }));
       
-      setStatusText("正在進行語言分析與翻譯...");
+      const detectedLanguage = data.language || transcript[0]?.lang;
+      setStatusText(detectedLanguage ? `已取得 ${detectedLanguage} 字幕，正在分析與翻譯...` : "正在進行語言分析與翻譯...");
       await processTextWithGemini("", mapped); 
       
     } catch(e: any) {
@@ -711,11 +734,11 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             {showCopyPasteGuide && (
               <div className="mb-4 p-4 rounded-xl bg-[#e2b714]/10 border border-[#e2b714]/30 text-sm text-[#fffffe] flex flex-col gap-2">
                 <div className="flex items-center justify-between font-bold text-[#e2b714]">
-                  <span className="flex items-center gap-1.5 modal-title text-base">⚠️ 此影片受到 YouTube 隱私或年齡限制，伺服器無法直接抓取字幕</span>
+                  <span className="flex items-center gap-1.5 modal-title text-base">⚠️ 目前無法自動取得 YouTube 字幕</span>
                   <button onClick={() => setShowCopyPasteGuide(false)} className="text-white/40 hover:text-white transition-opacity">✕</button>
                 </div>
                 <p className="opacity-90 leading-relaxed text-xs">
-                  別擔心！您可以透過以下 3 個簡單步驟，手動複製 YouTube 官方字幕並貼到下方框中進行智慧點讀與分析：
+                  可能是影片沒有字幕、字幕服務額度已用完，或服務暫時無法連線。您仍可透過以下步驟貼上 YouTube 官方字幕：
                 </p>
                 <div className="flex flex-col gap-2 scale-95 mt-1">
                   <div className="flex gap-2">
