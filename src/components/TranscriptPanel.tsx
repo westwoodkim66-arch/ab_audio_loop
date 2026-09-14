@@ -182,13 +182,30 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
       // Data to process - split by end of sentence marks, avoiding commas to prevent over-fragmentation
       let rawData = existingLines ? [...existingLines] : text.split(/(?<=[。！？\!\?\n])/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
 
-      const CHUNK_SIZE = 8; // Process fewer lines per chunk for better split focus
-      let allProcessedLines: SubtitleLine[] = [];
-      setLines([]); // Clear existing
+      const CHUNK_SIZE = 12;
+      const MAX_CONCURRENT_CHUNKS = 3;
+      const chunks = Array.from({ length: Math.ceil(rawData.length / CHUNK_SIZE) }, (_, index) =>
+        rawData.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE)
+      );
+      const placeholderChunks: SubtitleLine[][] = chunks.map((chunk, chunkIndex) =>
+        chunk.map((item: any, itemIndex: number) => ({
+          id: item.id || `pending_${chunkIndex}_${itemIndex}`,
+          originalText: item.originalText || "",
+          translation: item.providedTranslation || "分析中…",
+          startTime: item.startTime ?? -1,
+          endTime: item.endTime ?? -1,
+          words: [{ word: item.originalText || "", furigana: "", romaji: "", pos: "misc" }]
+        }))
+      );
+      const processedChunks: SubtitleLine[][] = new Array(chunks.length);
+      let completedChunks = 0;
 
-      for (let i = 0; i < rawData.length; i += CHUNK_SIZE) {
-        const chunk = rawData.slice(i, i + CHUNK_SIZE);
-        setStatusText(`正在處理第 ${i + 1} ~ ${Math.min(i + CHUNK_SIZE, rawData.length)} 段 (共 ${rawData.length} 段)...`);
+      // 先顯示原始字幕；詳細翻譯、讀音和詞性在背景並行補上。
+      setLines(placeholderChunks.flat());
+      setStatusText(`字幕已載入，正在並行分析 ${chunks.length} 批內容...`);
+
+      const processChunk = async (chunk: any[], chunkIndex: number) => {
+        const i = chunkIndex * CHUNK_SIZE;
         
         const prompt = `You are an expert linguist. The user will provide a transcript segment that might be in Japanese, English, or a mix. 
 Process the segment into natural subtitle chunks.
@@ -266,9 +283,22 @@ ${JSON.stringify(chunk)}
             id: item.id ? `${item.id}_${i}_${pIdx}` : `line_${Date.now()}_${i}_${pIdx}`
         }));
         
-        allProcessedLines = [...allProcessedLines, ...uniqueParsed];
-        setLines([...allProcessedLines]); // Progressive update
-      }
+        processedChunks[chunkIndex] = uniqueParsed;
+        completedChunks += 1;
+        setLines(processedChunks.flatMap((processed, index) => processed || placeholderChunks[index]));
+        setStatusText(`已完成 ${completedChunks}/${chunks.length} 批，字幕可先開始點讀...`);
+      };
+
+      let nextChunkIndex = 0;
+      const worker = async () => {
+        while (nextChunkIndex < chunks.length) {
+          const chunkIndex = nextChunkIndex++;
+          await processChunk(chunks[chunkIndex], chunkIndex);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(MAX_CONCURRENT_CHUNKS, chunks.length) }, () => worker())
+      );
       
       setStatusText("所有文稿處理完成！");
       setTimeout(() => setStatusText(""), 3000);
