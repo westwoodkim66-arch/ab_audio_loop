@@ -247,6 +247,7 @@ export default function App() {
   const [volume, setVolume] = useState(1);
   const [activeVolume, setActiveVolume] = useState(1);
   const [isVolumeBoostEnabled, setIsVolumeBoostEnabled] = useState(false);
+  const [volumeBoostBlockedUrl, setVolumeBoostBlockedUrl] = useState('');
   const isFadingRef = useRef(false);
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [pointA, setPointA] = useState<number | null>(initialData.pointA);
@@ -488,9 +489,23 @@ export default function App() {
 
   const isVolumeBoostAvailable = useMemo(() => {
     if (!audioUrl) return false;
+    if (volumeBoostBlockedUrl === audioUrl) return false;
     // 第三方 iframe 的音軌不會暴露給外層網頁；直接音訊／影片檔則可使用 Web Audio。
     return !/(?:youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|dai\.ly|twitch\.tv|facebook\.com|soundcloud\.com|mixcloud\.com)/i.test(audioUrl);
-  }, [audioUrl]);
+  }, [audioUrl, volumeBoostBlockedUrl]);
+
+  const playbackUrl = useMemo(() => {
+    if (!audioUrl || !isVolumeBoostAvailable || !/^https?:\/\//i.test(audioUrl)) return audioUrl;
+    try {
+      const parsed = new URL(audioUrl);
+      if (parsed.origin === window.location.origin) return audioUrl;
+      // Web Audio silences cross-origin media without CORS. Route direct media through our same-origin,
+      // size-limited proxy while keeping audioUrl unchanged for display and sharing.
+      return `/api/media-proxy?url=${encodeURIComponent(audioUrl)}`;
+    } catch {
+      return audioUrl;
+    }
+  }, [audioUrl, isVolumeBoostAvailable]);
 
   useEffect(() => {
     // 換檔時先恢復正常增益，避免使用者誤以為新來源也已完成增益處理。
@@ -1698,7 +1713,14 @@ export default function App() {
       if (volumeBoostElementRef.current !== internalPlayer) {
         try { volumeBoostSourceRef.current?.disconnect(); } catch {}
         const source = context.createMediaElementSource(internalPlayer);
-        source.connect(volumeBoostGainRef.current!);
+        try {
+          source.connect(volumeBoostGainRef.current!);
+        } catch (connectError) {
+          // A MediaElementSource permanently takes over this element. Keep normal audio alive if the
+          // boost graph cannot be connected, instead of leaving the player silent.
+          source.connect(context.destination);
+          throw connectError;
+        }
         volumeBoostSourceRef.current = source;
         volumeBoostElementRef.current = internalPlayer;
       }
@@ -1723,6 +1745,8 @@ export default function App() {
 
   const togglePlay = () => {
     if (!audioUrl) return;
+    const boostContext = audioContextRef.current;
+    if (boostContext?.state === 'suspended') void boostContext.resume();
     if (!isPlaying) {
       // 解決部分內嵌瀏覽器 (如 Line) 除非手動改變音量否則沒有聲音的問題
       setTimeout(() => setVolume(v => v >= 1 ? 0.99 : v + 0.01), 50);
@@ -2362,12 +2386,16 @@ export default function App() {
                         }
                       }}
                       style={{ position: 'absolute', top: 0, left: 0 }}
-                      url={audioUrl}
+                      url={playbackUrl}
                       playing={isPlaying}
                       volume={activeVolume}
                       playbackRate={playbackRate}
                       loop={isRepeatEnabled && pointA === null && pointB === null}
-                      onPlay={() => setIsPlaying(true)}
+                      onPlay={() => {
+                        const boostContext = audioContextRef.current;
+                        if (boostContext?.state === 'suspended') void boostContext.resume();
+                        setIsPlaying(true);
+                      }}
                       onPause={() => setIsPlaying(false)}
                       onEnded={() => {
                         if (isRepeatEnabled) {
@@ -2397,6 +2425,13 @@ export default function App() {
                       }}
                       onError={() => {
                         if (!audioUrl) return;
+                        if (playbackUrl !== audioUrl) {
+                          // If the protected proxy rejects an unsupported/oversized source, immediately
+                          // fall back to native playback and disable BOOST for this URL.
+                          setVolumeBoostBlockedUrl(audioUrl);
+                          setError('此音檔無法使用 BOOST，已自動恢復原始播放網址。');
+                          return;
+                        }
                         setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
                         setSuccessMessage('');
                       }}
