@@ -4,6 +4,8 @@ export async function onRequestGet(context) {
   const { searchParams } = new URL(context.request.url);
   const videoUrl = searchParams.get("url") || "";
   const jobId = searchParams.get("jobId") || "";
+  const requestedMode = searchParams.get("mode") || "native";
+  const mode = ["native", "auto", "generate"].includes(requestedMode) ? requestedMode : "native";
   const apiKey = context.env?.SUPADATA_API_KEY;
 
   if (!apiKey) {
@@ -20,13 +22,16 @@ export async function onRequestGet(context) {
     return fetchSupadata(`${SUPADATA_BASE_URL}/${encodeURIComponent(jobId)}`, apiKey);
   }
 
-  if (!isYoutubeUrl(videoUrl)) {
-    return jsonResponse({ error: "INVALID_YOUTUBE_URL", message: "請先載入有效的 YouTube 網址。" }, 400);
+  if (!isAllowedMediaUrl(videoUrl, mode)) {
+    return jsonResponse({
+      error: "INVALID_MEDIA_URL",
+      message: mode === "native" ? "原生字幕只支援 YouTube 網址。" : "請載入有效的公開影片或音檔網址。",
+    }, 400);
   }
 
   const endpoint = new URL(SUPADATA_BASE_URL);
   endpoint.searchParams.set("url", videoUrl);
-  endpoint.searchParams.set("mode", "native");
+  endpoint.searchParams.set("mode", mode);
   return fetchSupadata(endpoint.toString(), apiKey);
 }
 
@@ -84,6 +89,7 @@ async function fetchSupadata(endpoint, apiKey) {
     language: data?.lang || transcript[0]?.lang || "",
     availableLanguages: Array.isArray(data?.availableLangs) ? data.availableLangs : [],
     provider: "supadata",
+    mode: data?.mode || "",
   });
 }
 
@@ -122,11 +128,13 @@ function mapSupadataError(status, data) {
   };
 }
 
-function isYoutubeUrl(value) {
+function isAllowedMediaUrl(value, mode) {
   try {
     const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
-    return host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
+    const isYoutube = host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
+    return mode === "native" ? isYoutube : true;
   } catch {
     return false;
   }

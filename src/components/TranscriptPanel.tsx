@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Type } from "@google/genai";
-import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2 } from 'lucide-react';
+import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
 
 export interface POSWord {
   word: string;
@@ -24,6 +24,27 @@ export interface TranscriptPanelProps {
   currentTime: number;
   initialLines?: SubtitleLine[];
   onLinesChange?: (lines: SubtitleLine[]) => void;
+  subtitleOffset?: number;
+  onSubtitleOffsetChange?: (offset: number) => void;
+}
+
+const PLACEHOLDER_CAPTION = /^[\s♪♫♬]*[\[\(（【]?\s*(?:音楽|音樂|音乐|music|instrumental|applause|掌聲|掌声|拍手)\s*[\]\)）】]?[\s♪♫♬]*$/i;
+
+function normalizeTimedTranscript(items: any[]) {
+  const sorted = items
+    .map((item, index) => ({ ...item, _order: index }))
+    .filter(item => Number.isFinite(Number(item.startTime)))
+    .sort((a, b) => Number(a.startTime) - Number(b.startTime) || a._order - b._order);
+
+  return sorted.map((item, index) => {
+    const start = Math.max(0, Number(item.startTime));
+    const nextStart = index + 1 < sorted.length ? Number(sorted[index + 1].startTime) : null;
+    const suppliedEnd = Number(item.endTime);
+    let end = Number.isFinite(suppliedEnd) && suppliedEnd > start ? suppliedEnd : start + 3;
+    // YouTube/Supadata durations occasionally overlap the next cue. Never let an older cue win that overlap.
+    if (nextStart !== null && Number.isFinite(nextStart)) end = Math.min(end, Math.max(start + 0.08, nextStart));
+    return { ...item, startTime: start, endTime: end, _order: undefined };
+  });
 }
 
 // POS Colors Configuration (Dark Mode Optimized Highlights)
@@ -38,7 +59,7 @@ const POS_STYLES: Record<string, string> = {
   misc: "bg-[#94a1b2]/10 text-[#94a1b2] border-b border-[#94a1b2]/30 px-1.5 py-0.5 rounded-md",
 };
 
-export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange }: TranscriptPanelProps) {
+export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange, subtitleOffset = 0, onSubtitleOffsetChange }: TranscriptPanelProps) {
   const [lines, setLines] = useState<SubtitleLine[]>(initialLines);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState("");
@@ -46,12 +67,14 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showCopyPasteGuide, setShowCopyPasteGuide] = useState(false);
+  const [placeholderCount, setPlaceholderCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const whisperWorkerRef = useRef<Worker | null>(null);
 
   const getActiveWordIndex = (line: SubtitleLine, currentTime: number): number => {
     if (line.startTime === null || line.endTime === null || line.startTime === -1 || line.endTime === -1) return -1;
-    if (currentTime < line.startTime || currentTime > line.endTime) return -1;
+    if (currentTime < line.startTime || currentTime >= line.endTime) return -1;
     
     const duration = line.endTime - line.startTime;
     if (duration <= 0) return -1;
@@ -94,24 +117,20 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   useEffect(() => {
     if (lines.length === 0) return;
     
-    // 1. Try to find the exact line we are currently inside
-    let idx = lines.findIndex(line => 
-        line.startTime !== undefined && line.endTime !== undefined && 
-        line.startTime !== -1 && line.endTime !== -1 &&
-        currentTime >= line.startTime && currentTime <= line.endTime
-    );
-    
-    // 2. If in a gap between lines, find the last spoken line (keeps it active)
-    if (idx === -1 && lines[0]?.startTime !== -1 && lines[0]?.startTime !== undefined) {
-        for (let i = lines.length - 1; i >= 0; i--) {
-            if (lines[i].startTime !== undefined && lines[i].startTime !== -1 && currentTime >= (lines[i].startTime as number)) {
-                idx = i;
-                break;
-            }
-        }
+    // Choose the newest cue that has started. This prevents an older overlapping cue from winning.
+    let idx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const start = lines[i].startTime;
+      if (start !== null && start !== undefined && start !== -1 && currentTime >= start) idx = i;
+      else if (start !== null && start !== undefined && start > currentTime) break;
+    }
+    // Do not keep stale subtitles visible through a silent gap.
+    if (idx !== -1) {
+      const end = lines[idx].endTime;
+      if (end === null || end === undefined || end === -1 || currentTime >= end) idx = -1;
     }
 
-    if (idx !== -1 && idx !== activeIndex) {
+    if (idx !== activeIndex) {
         setActiveIndex(idx);
     }
   }, [currentTime, lines, activeIndex]);
@@ -135,6 +154,8 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         }
     }
   }, [activeIndex, autoScroll]);
+
+  useEffect(() => () => whisperWorkerRef.current?.terminate(), []);
 
   const fetchGemini = async (options: any) => {
     try {
@@ -380,14 +401,98 @@ ${JSON.stringify(chunk)}
     return result;
   };
 
-  const loadYoutubeTranscript = async () => {
-    if (!audioUrl || (!audioUrl.includes('youtube.com') && !audioUrl.includes('youtu.be'))) {
-      setStatusText("請先載入有效的 YouTube 網址！");
+  const decodeAudioTo16kMono = async (url: string) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`無法讀取音檔（HTTP ${response.status}）`);
+    const encoded = await response.arrayBuffer();
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    const context = new AudioContextClass();
+    try {
+      const decoded: AudioBuffer = await context.decodeAudioData(encoded.slice(0));
+      if (decoded.duration > 60 * 60) throw new Error("瀏覽器版 Whisper 目前支援最長 60 分鐘的音檔");
+      const targetRate = 16000;
+      const targetLength = Math.ceil(decoded.duration * targetRate);
+      const output = new Float32Array(targetLength);
+      const ratio = decoded.sampleRate / targetRate;
+      const channels = Array.from({ length: decoded.numberOfChannels }, (_, channel) => decoded.getChannelData(channel));
+      for (let i = 0; i < targetLength; i++) {
+        const sourceIndex = Math.min(decoded.length - 1, Math.floor(i * ratio));
+        let sample = 0;
+        for (const channel of channels) sample += channel[sourceIndex] || 0;
+        output[i] = sample / channels.length;
+      }
+      return output;
+    } finally {
+      await context.close();
+    }
+  };
+
+  const transcribeLocalWithWhisper = async () => {
+    setIsProcessing(true);
+    setStatusText("正在解碼本機音檔…");
+    setShowCopyPasteGuide(false);
+    try {
+      const samples = await decodeAudioTo16kMono(audioUrl);
+      setStatusText("正在載入免費 Whisper 模型（首次使用時間較長）…");
+      if (!whisperWorkerRef.current) {
+        whisperWorkerRef.current = new Worker(new URL('../workers/whisper.worker.ts', import.meta.url), { type: 'module' });
+      }
+      const worker = whisperWorkerRef.current;
+      const output: any = await new Promise((resolve, reject) => {
+        const onMessage = (event: MessageEvent<any>) => {
+          const message = event.data;
+          if (message.type === 'progress') {
+            const percent = Number(message.progress?.progress);
+            const file = message.progress?.file || "模型";
+            setStatusText(Number.isFinite(percent) ? `正在下載 ${file}… ${Math.round(percent)}%` : "正在準備 Whisper 模型…");
+          } else if (message.type === 'status') {
+            setStatusText(message.message);
+          } else if (message.type === 'result') {
+            worker.removeEventListener('message', onMessage);
+            resolve(message.output);
+          } else if (message.type === 'error') {
+            worker.removeEventListener('message', onMessage);
+            reject(new Error(message.message));
+          }
+        };
+        worker.addEventListener('message', onMessage);
+        worker.postMessage({ audio: samples.buffer }, [samples.buffer]);
+      });
+
+      const chunks = Array.isArray(output?.chunks) ? output.chunks : [];
+      const mapped = normalizeTimedTranscript(chunks.map((chunk: any, index: number) => ({
+        id: `whisper_${index}`,
+        originalText: String(chunk.text || '').trim(),
+        startTime: Number(chunk.timestamp?.[0] ?? 0),
+        endTime: Number(chunk.timestamp?.[1] ?? (Number(chunk.timestamp?.[0] ?? 0) + 3)),
+      })).filter((line: any) => line.originalText));
+      if (mapped.length === 0) throw new Error("Whisper 未辨識出可用語音");
+      setPlaceholderCount(0);
+      setStatusText(`Whisper 已辨識 ${mapped.length} 段，正在分析與翻譯…`);
+      await processTextWithGemini("", mapped);
+    } catch (error: any) {
+      setStatusText(`AI 語音辨識失敗：${error.message}`);
+      setIsProcessing(false);
+    }
+  };
+
+  const loadRemoteTranscript = async (mode: 'native' | 'generate') => {
+    const isYoutube = /(?:youtube\.com|youtu\.be)/i.test(audioUrl);
+    if (!audioUrl || (mode === 'native' && !isYoutube)) {
+      setStatusText(mode === 'native' ? "原生字幕只支援 YouTube 網址。" : "請先載入影片或音檔網址！");
       setTimeout(() => setStatusText(""), 3000);
       return;
     }
+    if (mode === 'generate' && audioUrl.startsWith('blob:')) {
+      await transcribeLocalWithWhisper();
+      return;
+    }
+    if (!/^https?:\/\//i.test(audioUrl)) {
+      setStatusText("AI 語音辨識需要公開網址，或從電腦重新上傳音檔。");
+      return;
+    }
     setIsProcessing(true);
-    setStatusText("正在讀取 YouTube 字幕...");
+    setStatusText(mode === 'native' ? "正在讀取 YouTube 原生字幕…" : "AI 正在聆聽並產生字幕，時間會比原生字幕久…");
     setShowCopyPasteGuide(false);
     
     try {
@@ -399,7 +504,7 @@ ${JSON.stringify(chunk)}
         return payload;
       };
 
-      let res = await fetch(`/api/yt-transcript?url=${encodeURIComponent(audioUrl)}`);
+      let res = await fetch(`/api/yt-transcript?url=${encodeURIComponent(audioUrl)}&mode=${mode}`);
       let data = await parseResponse(res);
 
       if (res.status === 202) {
@@ -407,9 +512,9 @@ ${JSON.stringify(chunk)}
         if (!jobId) throw new Error("字幕服務已接受請求，但未回傳工作編號");
 
         let completed = false;
-        for (let attempt = 1; attempt <= 20; attempt++) {
-          setStatusText(`字幕處理中，請稍候...（${attempt}/20）`);
-          await new Promise(resolve => setTimeout(resolve, 1500));
+        for (let attempt = 1; attempt <= 40; attempt++) {
+          setStatusText(`${mode === 'generate' ? 'AI 語音辨識' : '字幕'}處理中…（${attempt}/40）`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
           res = await fetch(`/api/yt-transcript?jobId=${encodeURIComponent(jobId)}`);
           data = await parseResponse(res);
           if (res.status !== 202) {
@@ -417,7 +522,7 @@ ${JSON.stringify(chunk)}
             break;
           }
         }
-        if (!completed) throw new Error("字幕處理時間較長，請稍後重新按一次「讀取 YT 字幕」");
+        if (!completed) throw new Error("AI 處理時間較長，請稍後再試一次");
       }
 
       const transcript = Array.isArray(data) ? data : (data.transcript || data.content);
@@ -426,24 +531,29 @@ ${JSON.stringify(chunk)}
       }
       
       // format to match prompt mapping
-      const mapped = transcript.map((d: any, idx: number) => ({
-        id: `yt_${idx}`,
+      const mapped = normalizeTimedTranscript(transcript.map((d: any, idx: number) => ({
+        id: `${mode === 'generate' ? 'ai' : 'yt'}_${idx}`,
         originalText: d.text,
         startTime: d.offset / 1000,
         endTime: (d.offset + d.duration) / 1000
-      }));
+      })));
+
+      const musicMarkers = mapped.filter((line: any) => PLACEHOLDER_CAPTION.test(line.originalText)).length;
+      setPlaceholderCount(mode === 'native' ? musicMarkers : 0);
       
       const detectedLanguage = data.language || transcript[0]?.lang;
-      setStatusText(detectedLanguage ? `已取得 ${detectedLanguage} 字幕，正在分析與翻譯...` : "正在進行語言分析與翻譯...");
+      setStatusText(detectedLanguage ? `已取得 ${detectedLanguage} ${mode === 'generate' ? 'AI' : '原生'}字幕，正在分析與翻譯…` : "正在進行語言分析與翻譯…");
       await processTextWithGemini("", mapped); 
       
     } catch(e: any) {
-      setStatusText("讀取失敗：" + e.message);
+      setStatusText(`${mode === 'generate' ? 'AI 語音辨識' : '讀取'}失敗：${e.message}`);
       setIsProcessing(false);
-      // Automatically prompt the user to use copy-paste backup when fail
-      setShowCopyPasteGuide(true);
+      setShowCopyPasteGuide(mode === 'native');
     }
   };
+
+  const loadYoutubeTranscript = () => loadRemoteTranscript('native');
+  const loadAiTranscript = () => loadRemoteTranscript('generate');
 
   const handleManualInput = () => {
     if(!inputText.trim()) return;
@@ -727,6 +837,28 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
         </h2>
         
         <div className="flex flex-wrap gap-2 items-center">
+            {onSubtitleOffsetChange && (
+              <div className="flex items-center rounded-lg border border-white/10 bg-black/20 overflow-hidden text-xs font-bold text-white" title="說話比字幕早：按「字幕提前」；說話比字幕晚：按「字幕延後」">
+                <button
+                  type="button"
+                  onClick={() => onSubtitleOffsetChange(Math.max(-5, Number((subtitleOffset - 0.25).toFixed(2))))}
+                  className="px-2.5 py-1.5 hover:bg-white/10 transition-colors"
+                >字幕延後</button>
+                <span className="min-w-[58px] text-center text-[#e2b714] border-x border-white/10">{subtitleOffset >= 0 ? '+' : ''}{subtitleOffset.toFixed(2)}s</span>
+                <button
+                  type="button"
+                  onClick={() => onSubtitleOffsetChange(Math.min(5, Number((subtitleOffset + 0.25).toFixed(2))))}
+                  className="px-2.5 py-1.5 hover:bg-white/10 transition-colors"
+                >字幕提前</button>
+                <button
+                  type="button"
+                  aria-label="重設字幕同步"
+                  title="重設字幕同步"
+                  onClick={() => onSubtitleOffsetChange(0)}
+                  className="px-2 py-1.5 hover:bg-white/10 transition-colors border-l border-white/10"
+                ><RotateCcw className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
             <label className="flex items-center gap-2 text-sm font-bold text-[#fffffe] bg-black/20 px-3 py-1.5 rounded-lg border border-white/10 cursor-pointer hover:bg-black/40 transition-colors">
                <input 
                  type="checkbox" 
@@ -741,7 +873,15 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                disabled={isProcessing}
                className="px-3 py-1.5 rounded-lg bg-[#2cb67d] text-white flex items-center gap-1.5 text-sm font-bold opacity-90 hover:opacity-100 disabled:opacity-50 transition-all">
                 <Youtube className="w-4 h-4" />
-                讀取 YT 字幕
+                讀取 YT 原生字幕
+            </button>
+            <button
+               onClick={loadAiTranscript}
+               disabled={isProcessing || !audioUrl}
+               title="YouTube／公開媒體網址由雲端 AI 聽寫；本機音檔使用瀏覽器內免費 Whisper"
+               className="px-3 py-1.5 rounded-lg bg-[#7f5af0] text-white flex items-center gap-1.5 text-sm font-bold opacity-90 hover:opacity-100 disabled:opacity-50 transition-all">
+                <AudioLines className="w-4 h-4" />
+                AI 語音辨識
             </button>
             <button 
                onClick={() => fileInputRef.current?.click()}
@@ -753,6 +893,18 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} accept="image/*,.srt,.vtt,.txt" className="hidden" />
         </div>
       </div>
+
+      {placeholderCount > 0 && (
+        <div className="mx-4 mt-4 p-3 rounded-xl bg-[#e2b714]/10 border border-[#e2b714]/30 text-sm text-[#fffffe] flex flex-wrap items-center justify-between gap-3">
+          <span>偵測到 {placeholderCount} 段只有「音樂／Music」的原生字幕；可讓 AI 重新聆聽整段媒體來補足台詞。</span>
+          <button
+            type="button"
+            onClick={loadAiTranscript}
+            disabled={isProcessing}
+            className="px-3 py-1.5 rounded-lg bg-[#e2b714] text-black font-bold disabled:opacity-50"
+          >改用 AI 語音辨識</button>
+        </div>
+      )}
 
       {lines.length === 0 && (
          <div 

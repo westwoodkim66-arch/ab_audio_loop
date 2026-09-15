@@ -101,13 +101,15 @@ async function startServer() {
 
       const jobId = typeof req.query.jobId === "string" ? req.query.jobId : "";
       const videoUrl = typeof req.query.url === "string" ? req.query.url : "";
+      const requestedMode = typeof req.query.mode === "string" ? req.query.mode : "native";
+      const mode = ["native", "auto", "generate"].includes(requestedMode) ? requestedMode : "native";
       if (!jobId && !videoUrl) {
         return res.status(400).json({ error: "INVALID_YOUTUBE_URL", message: "請先載入有效的 YouTube 網址。" });
       }
 
       const endpoint = jobId
         ? `https://api.supadata.ai/v1/transcript/${encodeURIComponent(jobId)}`
-        : `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(videoUrl)}&mode=native`;
+        : `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(videoUrl)}&mode=${mode}`;
       const upstream = await fetch(endpoint, { headers: { "x-api-key": apiKey, "Accept": "application/json" } });
       const data: any = await upstream.json().catch(() => ({}));
 

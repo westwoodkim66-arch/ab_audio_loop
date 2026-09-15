@@ -386,7 +386,7 @@ export default function App() {
   const [previewTime, setPreviewTime] = useState<number | null>(null);
   const [isHoveringBar, setIsHoveringBar] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
-  const [subtitleOffset, setSubtitleOffset] = useState<number>(0.15); // 微調字幕同步
+  const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // 正值讓字幕提前，負值讓字幕延後
 
   const syncTime = useMemo(() => {
     // 依據不同播放速率（playbackRate）實行自動補償
@@ -401,19 +401,15 @@ export default function App() {
   // --- Active Subtitle Overlay Logic ---
   const activeLineIndex = useMemo(() => {
     if (!transcriptLines || transcriptLines.length === 0) return -1;
-    let idx = transcriptLines.findIndex(line => 
-      line.startTime !== undefined && line.endTime !== undefined && 
-      line.startTime !== -1 && line.endTime !== -1 &&
-      syncTime >= line.startTime && syncTime <= line.endTime
-    );
-    // If we're strictly between lines, find the last active line (optional, but follows TranscriptPanel)
-    if (idx === -1 && transcriptLines[0]?.startTime !== -1 && transcriptLines[0]?.startTime !== undefined) {
-      for (let i = transcriptLines.length - 1; i >= 0; i--) {
-        if (transcriptLines[i].startTime !== undefined && transcriptLines[i].startTime !== -1 && syncTime >= (transcriptLines[i].startTime as number)) {
-          idx = i;
-          break;
-        }
-      }
+    let idx = -1;
+    for (let i = 0; i < transcriptLines.length; i++) {
+      const start = transcriptLines[i].startTime;
+      if (start !== null && start !== undefined && start !== -1 && syncTime >= start) idx = i;
+      else if (start !== null && start !== undefined && start > syncTime) break;
+    }
+    if (idx !== -1) {
+      const end = transcriptLines[idx].endTime;
+      if (end === null || end === undefined || end === -1 || syncTime >= end) idx = -1;
     }
     return idx;
   }, [syncTime, transcriptLines]);
@@ -422,7 +418,7 @@ export default function App() {
     if (activeLineIndex === -1 || !transcriptLines) return -1;
     const line = transcriptLines[activeLineIndex];
     if (line.startTime == null || line.endTime == null || line.startTime === -1 || line.endTime === -1) return -1;
-    if (syncTime < line.startTime || syncTime > line.endTime) return -1;
+    if (syncTime < line.startTime || syncTime >= line.endTime) return -1;
     
     const duration = line.endTime - line.startTime;
     if (duration <= 0) return -1;
@@ -4027,6 +4023,8 @@ export default function App() {
           currentTime={syncTime} 
           initialLines={transcriptLines}
           onLinesChange={setTranscriptLines}
+          subtitleOffset={subtitleOffset}
+          onSubtitleOffsetChange={setSubtitleOffset}
         />
       </div>
     </div>
