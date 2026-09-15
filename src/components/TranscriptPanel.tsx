@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
+import { resegmentTimedTranscript } from '../utils/transcriptSegmentation';
 
 export interface POSWord {
   word: string;
@@ -229,12 +230,13 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         const i = chunkIndex * CHUNK_SIZE;
         
         const prompt = `You are an expert linguist. The user will provide a transcript segment that might be in Japanese, English, or a mix. 
-Process the segment into natural subtitle chunks.
+Analyze each already-segmented subtitle line without changing its boundaries.
 CRITICAL RULES:
 - Output ONLY valid JSON array.
+- Return EXACTLY ONE output object for EACH input object, in the SAME ORDER. Never merge two inputs and never split one input.
+- Preserve every input "id", "originalText", "startTime", and "endTime" exactly. Only add translation and word analysis.
 - "originalText" MUST match the input snippet EXACTLY in its original language. DO NOT translate "originalText". If it's English, keep it English.
 - "translation" should be the Traditional Chinese (繁體中文) translation of the original text. If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value.
-- Keep each segment natural and readable. For English, PRESERVE COMPLETE SENTENCES. Do not split short clauses or split by commas. A chunk should ideally be a full thought or sentence (e.g. 5-25 words). For Japanese, preserve complete sentences or natural, readable phrases. Merge short fragments if necessary to form complete thoughts.
 
 For each chunk:
 1. Tokenize the "originalText" into granular units:
@@ -298,11 +300,22 @@ ${JSON.stringify(chunk)}
         }
         
         const parsed = JSON.parse(resText);
-        // Ensure unique IDs in case AI split segments or reused input IDs
-        const uniqueParsed = parsed.map((item: any, pIdx: number) => ({
-            ...item,
-            id: item.id ? `${item.id}_${i}_${pIdx}` : `line_${Date.now()}_${i}_${pIdx}`
-        }));
+        const parsedById = new Map((Array.isArray(parsed) ? parsed : []).map((item: any) => [String(item?.id || ''), item]));
+        // Programmatically enforce one output per prepared sentence even if the model ignores instructions.
+        const uniqueParsed = chunk.map((source: any, pIdx: number) => {
+          const analyzed: any = parsedById.get(String(source.id || '')) || (Array.isArray(parsed) ? parsed[pIdx] : null) || {};
+          return {
+            ...analyzed,
+            id: `${source.id || `line_${Date.now()}`}_${i}_${pIdx}`,
+            originalText: source.originalText || '',
+            translation: analyzed.translation || source.providedTranslation || '',
+            startTime: source.startTime ?? -1,
+            endTime: source.endTime ?? -1,
+            words: Array.isArray(analyzed.words) && analyzed.words.length > 0
+              ? analyzed.words
+              : [{ word: source.originalText || '', furigana: '', romaji: '', pos: 'misc' }],
+          };
+        });
         
         processedChunks[chunkIndex] = uniqueParsed;
         completedChunks += 1;
@@ -460,12 +473,12 @@ ${JSON.stringify(chunk)}
       });
 
       const chunks = Array.isArray(output?.chunks) ? output.chunks : [];
-      const mapped = normalizeTimedTranscript(chunks.map((chunk: any, index: number) => ({
+      const mapped = resegmentTimedTranscript(normalizeTimedTranscript(chunks.map((chunk: any, index: number) => ({
         id: `whisper_${index}`,
         originalText: String(chunk.text || '').trim(),
         startTime: Number(chunk.timestamp?.[0] ?? 0),
         endTime: Number(chunk.timestamp?.[1] ?? (Number(chunk.timestamp?.[0] ?? 0) + 3)),
-      })).filter((line: any) => line.originalText));
+      })).filter((line: any) => line.originalText)));
       if (mapped.length === 0) throw new Error("Whisper 未辨識出可用語音");
       setPlaceholderCount(0);
       setStatusText(`Whisper 已辨識 ${mapped.length} 段，正在分析與翻譯…`);
@@ -531,12 +544,12 @@ ${JSON.stringify(chunk)}
       }
       
       // format to match prompt mapping
-      const mapped = normalizeTimedTranscript(transcript.map((d: any, idx: number) => ({
+      const mapped = resegmentTimedTranscript(normalizeTimedTranscript(transcript.map((d: any, idx: number) => ({
         id: `${mode === 'generate' ? 'ai' : 'yt'}_${idx}`,
         originalText: d.text,
         startTime: d.offset / 1000,
         endTime: (d.offset + d.duration) / 1000
-      })));
+      }))));
 
       const musicMarkers = mapped.filter((line: any) => PLACEHOLDER_CAPTION.test(line.originalText)).length;
       setPlaceholderCount(mode === 'native' ? musicMarkers : 0);
