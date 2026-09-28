@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 declare global {
   interface Window {
@@ -9,6 +9,7 @@ declare global {
 
 interface DailymotionPlayerProps {
   videoId: string;
+  playerId?: string;
   initialTime?: number | null;
   playing: boolean;
   volume: number;
@@ -20,62 +21,61 @@ interface DailymotionPlayerProps {
   playerRef: any;
 }
 
-// 全域 SDK 載入 Promise，避免重複載入
-let sdkPromise: Promise<any> | null = null;
+// The current Dailymotion Web SDK is tied to a Player ID. Cache per ID so a
+// rejected request can be retried and one configuration cannot leak to another.
+const sdkPromises = new Map<string, Promise<any>>();
 
-const loadDailymotionSDK = (): Promise<any> => {
-  if (sdkPromise) return sdkPromise;
-  
-  sdkPromise = new Promise((resolve, reject) => {
-    // 如果已存在，直接 resolve
-    if (window.dailymotion) {
-      resolve(window.dailymotion);
-      return;
-    }
+const loadDailymotionSDK = (playerId: string): Promise<any> => {
+  if (window.dailymotion?.createPlayer) return Promise.resolve(window.dailymotion);
 
-    // 檢查是否已有 script 標籤
-    const existing = document.getElementById('dm-sdk');
-    if (existing) {
-      const check = setInterval(() => {
-        if (window.dailymotion) {
-          clearInterval(check);
+  const cachedPromise = sdkPromises.get(playerId);
+  if (cachedPromise) return cachedPromise;
+
+  const promise = new Promise<any>((resolve, reject) => {
+    const scriptId = `dm-sdk-${playerId}`;
+    const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
+
+    const waitForSDK = () => {
+      const startedAt = Date.now();
+      const check = window.setInterval(() => {
+        if (window.dailymotion?.createPlayer) {
+          window.clearInterval(check);
           resolve(window.dailymotion);
+        } else if (Date.now() - startedAt >= 10000) {
+          window.clearInterval(check);
+          reject(new Error('Dailymotion SDK initialization timed out'));
         }
       }, 100);
-      setTimeout(() => {
-        clearInterval(check);
-        if (!window.dailymotion) reject(new Error('SDK timeout'));
-      }, 10000);
+    };
+
+    if (existingScript) {
+      waitForSDK();
       return;
     }
 
     const script = document.createElement('script');
-    script.id = 'dm-sdk';
-    // 使用官方通用 Player SDK
-    script.src = 'https://geo.dailymotion.com/libs/player.js';
+    script.id = scriptId;
+    script.dataset.dmPlayerId = playerId;
+    // Dailymotion's current library URL requires the Player ID in the path.
+    script.src = `https://geo.dailymotion.com/libs/player/${encodeURIComponent(playerId)}.js`;
     script.async = true;
-    script.onload = () => {
-      // SDK 載入後等待 window.dailymotion 出現
-      const check = setInterval(() => {
-        if (window.dailymotion) {
-          clearInterval(check);
-          resolve(window.dailymotion);
-        }
-      }, 100);
-      setTimeout(() => {
-        clearInterval(check);
-        if (!window.dailymotion) reject(new Error('dailymotion object not found'));
-      }, 10000);
+    script.referrerPolicy = 'strict-origin-when-cross-origin';
+    script.onload = waitForSDK;
+    script.onerror = () => {
+      script.remove();
+      reject(new Error('Failed to load Dailymotion Player library'));
     };
-    script.onerror = () => reject(new Error('Failed to load Dailymotion SDK'));
     document.head.appendChild(script);
   });
-  
-  return sdkPromise;
+
+  sdkPromises.set(playerId, promise);
+  promise.catch(() => sdkPromises.delete(playerId));
+  return promise;
 };
 
 export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
   videoId,
+  playerId,
   initialTime,
   playing,
   volume,
@@ -90,6 +90,14 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
   const dmPlayerInstance = useRef<any>(null);
   const pollingRef = useRef<number | null>(null);
   const isReadyRef = useRef(false);
+  const fallbackReadyRef = useRef(false);
+  const normalizedPlayerId = playerId?.trim() ?? '';
+  const validPlayerId = /^[a-z\d_-]{2,64}$/i.test(normalizedPlayerId);
+  const [fallbackMessage, setFallbackMessage] = useState(() => (
+    normalizedPlayerId
+      ? (validPlayerId ? '' : 'Player ID 格式無效，已改用 Dailymotion 原生播放器。')
+      : '尚未設定 Dailymotion Player ID，已改用原生播放器；本站的 A/B 與播放控制暫不可用。'
+  ));
   const initialTimeRef = useRef(initialTime);
   const playingRef = useRef(playing);
   const containerId = useRef(`dm-player-${videoId}-${Math.random().toString(36).slice(2, 9)}`);
@@ -110,10 +118,23 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
     let readyRetryTimer: number | null = null;
     const readyDeadline = Date.now() + 30000;
     isReadyRef.current = false;
+    fallbackReadyRef.current = false;
+    playerRef.current = null;
+
+    if (!validPlayerId) {
+      setFallbackMessage(normalizedPlayerId
+        ? 'Player ID 格式無效，已改用 Dailymotion 原生播放器。'
+        : '尚未設定 Dailymotion Player ID，已改用原生播放器；本站的 A/B 與播放控制暫不可用。');
+      return () => {
+        active = false;
+      };
+    }
+
+    setFallbackMessage('');
 
     const init = async () => {
       try {
-        const dm = await loadDailymotionSDK();
+        const dm = await loadDailymotionSDK(normalizedPlayerId);
         if (!active || !containerRef.current) return;
 
         // 確保容器是空的
@@ -124,6 +145,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
           params: {
             autoplay: false, // 由 useEffect 控制
             mute: false,
+            startTime: typeof initialTimeRef.current === 'number' ? Math.max(0, initialTimeRef.current) : 0,
             controls: false,
             'queue-enable': false,
             'sharing-enable': false,
@@ -207,7 +229,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
             if (playingRef.current) {
               try { await Promise.resolve(player.play()); } catch(e){}
             }
-          } catch(e) {
+        } catch(e) {
             if (active && Date.now() < readyDeadline) {
               scheduleReadyRetry();
             } else if (active && !readyCompleted) {
@@ -311,6 +333,12 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
 
       } catch (err) {
         console.error('Dailymotion init failed:', err);
+        if (active) {
+          try { dmPlayerInstance.current?.destroy?.(); } catch {}
+          dmPlayerInstance.current = null;
+          playerRef.current = null;
+          setFallbackMessage('Dailymotion SDK 載入失敗，已改用原生播放器；本站的 A/B 與播放控制暫不可用。');
+        }
       }
     };
 
@@ -340,7 +368,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
         containerRef.current.innerHTML = '';
       }
     };
-  }, [videoId]);
+  }, [videoId, normalizedPlayerId, validPlayerId]);
 
   // 播放 / 暫停控制
   useEffect(() => {
@@ -379,14 +407,44 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
     } catch(e){}
   }, [playbackRate]);
 
+  const fallbackUrl = new URL('https://geo.dailymotion.com/player.html');
+  fallbackUrl.searchParams.set('video', videoId);
+  if (typeof initialTime === 'number' && Number.isFinite(initialTime) && initialTime > 0) {
+    fallbackUrl.searchParams.set('startTime', String(Math.floor(initialTime)));
+  }
+  if (volume === 0) fallbackUrl.searchParams.set('mute', 'true');
+
   return (
-    <div className="w-full h-full">
+    <div className="relative w-full h-full">
       <div 
         id={containerId.current} 
         ref={containerRef} 
         className="w-full h-full"
         style={{ minHeight: '100%' }}
-      />
+      >
+        {fallbackMessage && (
+          <iframe
+            key={`${videoId}-${fallbackMessage}`}
+            src={fallbackUrl.toString()}
+            title="Dailymotion 原生播放器"
+            className="absolute inset-0 h-full w-full border-0"
+            allow="autoplay; fullscreen; picture-in-picture; web-share"
+            allowFullScreen
+            referrerPolicy="strict-origin-when-cross-origin"
+            onLoad={() => {
+              if (!fallbackReadyRef.current) {
+                fallbackReadyRef.current = true;
+                onReady();
+              }
+            }}
+          />
+        )}
+      </div>
+      {fallbackMessage && (
+        <div className="pointer-events-none absolute bottom-1 left-1 right-1 rounded bg-black/75 px-2 py-1 text-center text-[10px] text-white/90">
+          {fallbackMessage}
+        </div>
+      )}
     </div>
   );
 };

@@ -22,3 +22,7 @@ View your app in AI Studio: https://ai.studio/apps/e15df1a3-0b27-4dbe-b364-fa354
 ## YouTube transcripts on Cloudflare Pages
 
 The transcript endpoint uses Supadata in `native` mode to retrieve existing YouTube captions with timestamps. Add `SUPADATA_API_KEY` as an encrypted variable in Cloudflare Pages under **Settings → Variables and Secrets**, then redeploy the project. The API key is read only by the server-side Function and is never sent to the browser.
+
+## Dailymotion playback
+
+The programmable Dailymotion player needs a Player ID. Create a Player configuration in Dailymotion Studio, then add `VITE_DAILYMOTION_PLAYER_ID` as a Cloudflare Pages **build environment variable** and redeploy. This ID is public player configuration, not a secret. With the ID configured, AB Loop loads Dailymotion's Player Library Script and keeps its seek, A/B, and playback controls. Without it, the app falls back to Dailymotion's default iframe player; playback remains available, but AB Loop cannot control or track that iframe.
