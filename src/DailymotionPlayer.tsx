@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import ReactPlayer from 'react-player';
 
 declare global {
   interface Window {
@@ -18,24 +19,29 @@ interface DailymotionPlayerProps {
   onDuration: (duration: number) => void;
   onReady: () => void;
   onEnded: () => void;
+  onPlay?: () => void;
+  onPause?: () => void;
   playerRef: any;
 }
 
-// The current Dailymotion Web SDK is tied to a Player ID. Cache per ID so a
-// rejected request can be retried and one configuration cannot leak to another.
+// Dailymotion also documents the Player Library without a Player ID. Keep that
+// path for accounts that cannot create a Player configuration in Studio.
 const sdkPromises = new Map<string, Promise<any>>();
 
 const loadDailymotionSDK = (playerId: string): Promise<any> => {
   if (window.dailymotion?.createPlayer) return Promise.resolve(window.dailymotion);
 
-  const cachedPromise = sdkPromises.get(playerId);
+  const scriptUrl = playerId
+    ? `https://geo.dailymotion.com/libs/player/${encodeURIComponent(playerId)}.js`
+    : 'https://geo.dailymotion.com/libs/player.js';
+  const cachedPromise = sdkPromises.get(scriptUrl);
   if (cachedPromise) return cachedPromise;
 
   const promise = new Promise<any>((resolve, reject) => {
-    const scriptId = `dm-sdk-${playerId}`;
+    const scriptId = playerId ? `dm-sdk-${playerId}` : 'dm-sdk-default';
     const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
 
-    const waitForSDK = () => {
+    const waitForSDK = (currentScript: HTMLScriptElement) => {
       const startedAt = Date.now();
       const check = window.setInterval(() => {
         if (window.dailymotion?.createPlayer) {
@@ -43,24 +49,24 @@ const loadDailymotionSDK = (playerId: string): Promise<any> => {
           resolve(window.dailymotion);
         } else if (Date.now() - startedAt >= 10000) {
           window.clearInterval(check);
+          currentScript.remove();
           reject(new Error('Dailymotion SDK initialization timed out'));
         }
       }, 100);
     };
 
     if (existingScript) {
-      waitForSDK();
+      waitForSDK(existingScript);
       return;
     }
 
     const script = document.createElement('script');
     script.id = scriptId;
     script.dataset.dmPlayerId = playerId;
-    // Dailymotion's current library URL requires the Player ID in the path.
-    script.src = `https://geo.dailymotion.com/libs/player/${encodeURIComponent(playerId)}.js`;
+    script.src = scriptUrl;
     script.async = true;
     script.referrerPolicy = 'strict-origin-when-cross-origin';
-    script.onload = waitForSDK;
+    script.onload = () => waitForSDK(script);
     script.onerror = () => {
       script.remove();
       reject(new Error('Failed to load Dailymotion Player library'));
@@ -68,8 +74,8 @@ const loadDailymotionSDK = (playerId: string): Promise<any> => {
     document.head.appendChild(script);
   });
 
-  sdkPromises.set(playerId, promise);
-  promise.catch(() => sdkPromises.delete(playerId));
+  sdkPromises.set(scriptUrl, promise);
+  promise.catch(() => sdkPromises.delete(scriptUrl));
   return promise;
 };
 
@@ -84,6 +90,8 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
   onDuration,
   onReady,
   onEnded,
+  onPlay,
+  onPause,
   playerRef
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -91,13 +99,12 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
   const pollingRef = useRef<number | null>(null);
   const isReadyRef = useRef(false);
   const fallbackReadyRef = useRef(false);
+  const legacyReadyRef = useRef(false);
+  const legacyPlayerRef = useRef<ReactPlayer | null>(null);
   const normalizedPlayerId = playerId?.trim() ?? '';
-  const validPlayerId = /^[a-z\d_-]{2,64}$/i.test(normalizedPlayerId);
-  const [fallbackMessage, setFallbackMessage] = useState(() => (
-    normalizedPlayerId
-      ? (validPlayerId ? '' : 'Player ID 格式無效，已改用 Dailymotion 原生播放器。')
-      : '尚未設定 Dailymotion Player ID，已改用原生播放器；本站的 A/B 與播放控制暫不可用。'
-  ));
+  const validPlayerId = !normalizedPlayerId || /^[a-z\d_-]{2,64}$/i.test(normalizedPlayerId);
+  const [fallbackMode, setFallbackMode] = useState<'sdk' | 'legacy' | 'native'>('sdk');
+  const [fallbackMessage, setFallbackMessage] = useState('');
   const initialTimeRef = useRef(initialTime);
   const playingRef = useRef(playing);
   const containerId = useRef(`dm-player-${videoId}-${Math.random().toString(36).slice(2, 9)}`);
@@ -119,18 +126,19 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
     const readyDeadline = Date.now() + 30000;
     isReadyRef.current = false;
     fallbackReadyRef.current = false;
+    legacyReadyRef.current = false;
     playerRef.current = null;
 
     if (!validPlayerId) {
-      setFallbackMessage(normalizedPlayerId
-        ? 'Player ID 格式無效，已改用 Dailymotion 原生播放器。'
-        : '尚未設定 Dailymotion Player ID，已改用原生播放器；本站的 A/B 與播放控制暫不可用。');
+      setFallbackMessage('Player ID 格式無效，已改用 Dailymotion 原生播放器；本站 A/B 控制不可用。');
+      setFallbackMode('native');
       return () => {
         active = false;
       };
     }
 
     setFallbackMessage('');
+    setFallbackMode('sdk');
 
     const init = async () => {
       try {
@@ -337,7 +345,10 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
           try { dmPlayerInstance.current?.destroy?.(); } catch {}
           dmPlayerInstance.current = null;
           playerRef.current = null;
-          setFallbackMessage('Dailymotion SDK 載入失敗，已改用原生播放器；本站的 A/B 與播放控制暫不可用。');
+          containerRef.current?.replaceChildren();
+          // ReactPlayer uses Dailymotion's older public SDK. It still exposes
+          // currentTime and seek to AB Loop when the modern library is blocked.
+          setFallbackMode('legacy');
         }
       }
     };
@@ -369,6 +380,18 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
       }
     };
   }, [videoId, normalizedPlayerId, validPlayerId]);
+
+  useEffect(() => {
+    if (fallbackMode !== 'legacy') return;
+    const timer = window.setTimeout(() => {
+      if (!legacyReadyRef.current) {
+        playerRef.current = null;
+        setFallbackMessage('可控制播放器無法載入，已改用 Dailymotion 原生播放器；本站 A/B 控制不可用。');
+        setFallbackMode('native');
+      }
+    }, 12000);
+    return () => window.clearTimeout(timer);
+  }, [fallbackMode, playerRef]);
 
   // 播放 / 暫停控制
   useEffect(() => {
@@ -416,31 +439,63 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
 
   return (
     <div className="relative w-full h-full">
-      <div 
+      <div
         id={containerId.current} 
         ref={containerRef} 
         className="w-full h-full"
-        style={{ minHeight: '100%' }}
-      >
-        {fallbackMessage && (
-          <iframe
-            key={`${videoId}-${fallbackMessage}`}
-            src={fallbackUrl.toString()}
-            title="Dailymotion 原生播放器"
-            className="absolute inset-0 h-full w-full border-0"
-            allow="autoplay; fullscreen; picture-in-picture; web-share"
-            allowFullScreen
-            referrerPolicy="strict-origin-when-cross-origin"
-            onLoad={() => {
-              if (!fallbackReadyRef.current) {
-                fallbackReadyRef.current = true;
-                onReady();
-              }
-            }}
-          />
-        )}
-      </div>
-      {fallbackMessage && (
+        style={{ minHeight: '100%', display: fallbackMode === 'sdk' ? 'block' : 'none' }}
+      />
+      {fallbackMode === 'legacy' && (
+        <ReactPlayer
+          ref={(instance) => {
+            legacyPlayerRef.current = instance;
+            if (instance) playerRef.current = instance;
+          }}
+          className="absolute inset-0"
+          url={`https://www.dailymotion.com/video/${encodeURIComponent(videoId)}`}
+          playing={playing}
+          volume={volume}
+          playbackRate={playbackRate}
+          controls
+          width="100%"
+          height="100%"
+          progressInterval={100}
+          onProgress={onProgress}
+          onDuration={onDuration}
+          onEnded={onEnded}
+          onPlay={onPlay}
+          onPause={onPause}
+          onReady={() => {
+            legacyReadyRef.current = true;
+            if (typeof initialTimeRef.current === 'number' && initialTimeRef.current > 0) {
+              legacyPlayerRef.current?.seekTo(initialTimeRef.current, 'seconds');
+            }
+            onReady();
+          }}
+          onError={() => {
+            playerRef.current = null;
+            setFallbackMessage('可控制播放器無法載入，已改用 Dailymotion 原生播放器；本站 A/B 控制不可用。');
+            setFallbackMode('native');
+          }}
+        />
+      )}
+      {fallbackMode === 'native' && (
+        <iframe
+          src={fallbackUrl.toString()}
+          title="Dailymotion 原生播放器"
+          className="absolute inset-0 h-full w-full border-0"
+          allow="autoplay; fullscreen; picture-in-picture; web-share"
+          allowFullScreen
+          referrerPolicy="strict-origin-when-cross-origin"
+          onLoad={() => {
+            if (!fallbackReadyRef.current) {
+              fallbackReadyRef.current = true;
+              onReady();
+            }
+          }}
+        />
+      )}
+      {fallbackMode === 'native' && fallbackMessage && (
         <div className="pointer-events-none absolute bottom-1 left-1 right-1 rounded bg-black/75 px-2 py-1 text-center text-[10px] text-white/90">
           {fallbackMessage}
         </div>
