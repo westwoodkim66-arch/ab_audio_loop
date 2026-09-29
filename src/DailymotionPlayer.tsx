@@ -149,6 +149,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
         containerRef.current.innerHTML = '';
 
         const player = await dm.createPlayer(containerId.current, {
+          player: normalizedPlayerId || originalPlayerId,
           video: videoId,
           params: {
             autoplay: false, // 由 useEffect 控制
