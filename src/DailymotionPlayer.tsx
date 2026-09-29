@@ -241,13 +241,15 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
             if (active && Date.now() < readyDeadline) {
               scheduleReadyRetry();
             } else if (active && !readyCompleted) {
-              // 30 秒後仍無法取得可跳轉狀態時才解除鎖定，避免永久卡死。
+              // A black Player with no timeline cannot support A/B. Try the
+              // older controllable integration before the native iframe.
               readyCompleted = true;
-              isReadyRef.current = true;
-              onReady();
-              if (playingRef.current) {
-                try { await Promise.resolve(player.play()); } catch(playError){}
-              }
+              isReadyRef.current = false;
+              try { player.destroy?.(); } catch {}
+              dmPlayerInstance.current = null;
+              playerRef.current = null;
+              containerRef.current?.replaceChildren();
+              setFallbackMode('legacy');
             }
           } finally {
             applyingInitialPosition = false;
