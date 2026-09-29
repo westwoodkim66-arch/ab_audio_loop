@@ -24,21 +24,21 @@ interface DailymotionPlayerProps {
   playerRef: any;
 }
 
-// Dailymotion also documents the Player Library without a Player ID. Keep that
-// path for accounts that cannot create a Player configuration in Studio.
+// The project's original Dailymotion integration used this public Player ID.
+// The bare /libs/player.js and /player.html endpoints can return Forbidden;
+// retain the previously working configuration for accounts without their own.
+const originalPlayerId = 'x5o62';
 const sdkPromises = new Map<string, Promise<any>>();
 
 const loadDailymotionSDK = (playerId: string): Promise<any> => {
   if (window.dailymotion?.createPlayer) return Promise.resolve(window.dailymotion);
 
-  const scriptUrl = playerId
-    ? `https://geo.dailymotion.com/libs/player/${encodeURIComponent(playerId)}.js`
-    : 'https://geo.dailymotion.com/libs/player.js';
+  const scriptUrl = `https://geo.dailymotion.com/libs/player/${encodeURIComponent(playerId || originalPlayerId)}.js`;
   const cachedPromise = sdkPromises.get(scriptUrl);
   if (cachedPromise) return cachedPromise;
 
   const promise = new Promise<any>((resolve, reject) => {
-    const scriptId = playerId ? `dm-sdk-${playerId}` : 'dm-sdk-default';
+    const scriptId = `dm-sdk-${playerId || originalPlayerId}`;
     const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
 
     const waitForSDK = (currentScript: HTMLScriptElement) => {
@@ -388,7 +388,10 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
     const timer = window.setTimeout(() => {
       if (!legacyReadyRef.current) {
         playerRef.current = null;
-        setFallbackMessage('可控制播放器無法載入，已改用 Dailymotion 原生播放器；本站 A/B 控制不可用。');
+        onProgress({ playedSeconds: 0 });
+        onDuration(0);
+        onPause?.();
+        setFallbackMessage('Dailymotion 可控制播放器無法載入。若播放器顯示 Forbidden，請在 Dailymotion 網站觀看。');
         setFallbackMode('native');
       }
     }, 12000);
@@ -432,7 +435,7 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
     } catch(e){}
   }, [playbackRate]);
 
-  const fallbackUrl = new URL('https://geo.dailymotion.com/player.html');
+  const fallbackUrl = new URL(`https://geo.dailymotion.com/player/${encodeURIComponent(normalizedPlayerId || originalPlayerId)}.html`);
   fallbackUrl.searchParams.set('video', videoId);
   if (typeof initialTime === 'number' && Number.isFinite(initialTime) && initialTime > 0) {
     fallbackUrl.searchParams.set('startTime', String(Math.floor(initialTime)));
@@ -476,7 +479,10 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
           }}
           onError={() => {
             playerRef.current = null;
-            setFallbackMessage('可控制播放器無法載入，已改用 Dailymotion 原生播放器；本站 A/B 控制不可用。');
+            onProgress({ playedSeconds: 0 });
+            onDuration(0);
+            onPause?.();
+            setFallbackMessage('Dailymotion 可控制播放器無法載入。若播放器顯示 Forbidden，請在 Dailymotion 網站觀看。');
             setFallbackMode('native');
           }}
         />
@@ -489,17 +495,20 @@ export const DailymotionPlayer: React.FC<DailymotionPlayerProps> = ({
           allow="autoplay; fullscreen; picture-in-picture; web-share"
           allowFullScreen
           referrerPolicy="strict-origin-when-cross-origin"
-          onLoad={() => {
-            if (!fallbackReadyRef.current) {
-              fallbackReadyRef.current = true;
-              onReady();
-            }
-          }}
+          onLoad={() => { fallbackReadyRef.current = true; }}
         />
       )}
-      {fallbackMode === 'native' && fallbackMessage && (
-        <div className="pointer-events-none absolute bottom-1 left-1 right-1 rounded bg-black/75 px-2 py-1 text-center text-[10px] text-white/90">
-          {fallbackMessage}
+      {fallbackMode === 'native' && (
+        <div className="absolute bottom-1 left-1 right-1 rounded bg-black/80 px-2 py-1 text-center text-[11px] text-white">
+          {fallbackMessage || 'Dailymotion 原生播放器由平台控制；本站 A/B 控制不可用。'}{' '}
+          <a
+            className="underline"
+            href={`https://www.dailymotion.com/video/${encodeURIComponent(videoId)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            在 Dailymotion 開啟影片
+          </a>
         </div>
       )}
     </div>
