@@ -1010,6 +1010,14 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <div className="flex flex-col gap-1 w-full pb-24">
                {lines.map((line, lIdx) => {
                    const isActive = lIdx === activeIndex;
+                   // Reserve annotation rows consistently across the sentence.
+                   // A label on only some words must not move the main text.
+                   const hasFurigana = line.words.some(word => !!word.furigana);
+                   const hasWordLabels = line.words.some(word =>
+                       (word.romaji && word.romaji !== word.word) ||
+                       (/^[A-Za-z0-9'\-.,!?;]+$/.test((word.word || word.romaji || '').trim()) &&
+                        ['noun', 'verb', 'adjective'].includes(word.pos))
+                   );
                    
                    return (
                        <div 
@@ -1021,7 +1029,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                             {isActive && (
                                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-[#7f5af0] rounded-r-full shadow-[0_0_10px_#7f5af0] animate-pulse"></div>
                             )}
-                            <div className="flex flex-wrap items-end gap-y-1 gap-x-1 w-full">
+                            <div className="flex flex-wrap items-start gap-y-1 gap-x-1 w-full">
                                 {line.words.map((word, idx) => {
                                     const isWordActive = isActive && getActiveWordIndex(line, currentTime) === idx;
                                     const displayWord = word.word || word.romaji || " ";
@@ -1038,12 +1046,12 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                                     const bottomLabel = displayRomaji || posLabel;
 
                                     return (
-                                        <div key={idx} className="flex flex-col items-center mx-[1px] leading-none shrink-0 group">
-                                            {word.furigana && <span className={`text-[9px] font-medium mb-0.5 transition-colors ${isWordActive ? "text-[#fffffe]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana}</span>}
-                                            <span className={`text-[17px] leading-snug font-semibold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all shadow-sm min-h-[26px] flex items-center justify-center ${isWordActive ? "ring-2 ring-white brightness-150 z-10 text-[#fffffe]" : ""}`}>
+                                        <div key={idx} className="grid justify-items-center items-center mx-[1px] leading-none shrink-0 group" style={{ gridTemplateRows: `${hasFurigana ? '12px ' : ''}28px${hasWordLabels ? ' 12px' : ''}` }}>
+                                            {hasFurigana && <span aria-hidden={!word.furigana} className={`text-[9px] font-medium whitespace-nowrap transition-colors ${isWordActive ? "text-[#fffffe]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana || '\u00a0'}</span>}
+                                            <span className={`text-[17px] leading-snug font-semibold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all shadow-sm h-7 box-border flex items-center justify-center ${isWordActive ? "ring-2 ring-white brightness-150 z-10 text-[#fffffe]" : ""}`}>
                                                 {displayWord}
                                             </span>
-                                            {bottomLabel && <span className={`text-[9px] mt-0.5 font-mono italic transition-opacity ${isWordActive ? "text-[#fffffe] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel}</span>}
+                                            {hasWordLabels && <span aria-hidden={!bottomLabel} className={`text-[9px] whitespace-nowrap font-mono italic transition-opacity ${isWordActive ? "text-[#fffffe] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel || '\u00a0'}</span>}
                                         </div>
                                     );
                                 })}
