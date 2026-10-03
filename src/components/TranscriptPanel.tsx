@@ -842,7 +842,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
   };
 
   return (
-    <div className="w-full mt-6 bg-[#16161a] border border-[#010101] shadow-2xl rounded-2xl overflow-hidden font-sans">
+    <div className="transcript-panel w-full mt-6 bg-[#16161a] border border-[#010101] shadow-2xl rounded-2xl overflow-hidden font-sans">
       <div className="p-4 border-b border-[#010101]/20 flex flex-wrap gap-4 items-center justify-between">
         <h2 className="text-xl font-bold text-[#fffffe] flex items-center gap-2">
             <FileText className="w-5 h-5 text-[#7f5af0]" />
@@ -975,7 +975,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
       )}
 
       {lines.length > 0 && (
-        <div ref={scrollContainerRef} className="p-4 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all max-h-[60vh] overflow-y-auto min-h-[400px] styled-scrollbar">
+        <div ref={scrollContainerRef} className="transcript-scroll p-3 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all max-h-[60dvh] overflow-y-auto styled-scrollbar">
             <div className="flex border-b border-white/5 pb-4 mb-4 gap-4 items-center">
               <span className="text-sm font-bold text-[#94a1b2]">詞性標記：</span>
               <div className="flex flex-wrap gap-2 text-[10px] items-center">
@@ -1016,12 +1016,12 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                          key={line.id} 
                          data-index={lIdx}
                          onClick={() => seekToLine(line.startTime)}
-                         className={`w-full flex flex-col gap-2 px-4 py-2.5 rounded-3xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 scale-[1.02] z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-70 hover:opacity-100 hover:bg-white/5'}`}
+                         className={`w-full flex flex-col gap-1 px-2 py-2 rounded-xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-70 hover:opacity-100 hover:bg-white/5'}`}
                        >
                             {isActive && (
                                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-[#7f5af0] rounded-r-full shadow-[0_0_10px_#7f5af0] animate-pulse"></div>
                             )}
-                            <div className="flex flex-wrap items-end gap-y-2 gap-x-1.5 mb-1 max-w-[90%] md:ml-2">
+                            <div className="flex flex-wrap items-end gap-y-1 gap-x-1 w-full">
                                 {line.words.map((word, idx) => {
                                     const isWordActive = isActive && getActiveWordIndex(line, currentTime) === idx;
                                     const displayWord = word.word || word.romaji || " ";
@@ -1039,16 +1039,16 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
 
                                     return (
                                         <div key={idx} className="flex flex-col items-center mx-[1px] leading-none shrink-0 group">
-                                            <span className={`text-[10px] font-medium h-3 mb-1 tracking-wider transition-colors ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana}</span>
-                                            <span className={`text-2xl font-bold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all shadow-sm min-h-[36px] flex items-center justify-center min-w-[24px] ${isWordActive ? "ring-2 ring-white scale-110 brightness-150 drop-shadow-[0_0_15px_rgba(255,255,255,0.7)] z-10 text-[#fffffe]" : ""}`}>
+                                            {word.furigana && <span className={`text-[9px] font-medium mb-0.5 transition-colors ${isWordActive ? "text-[#fffffe]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana}</span>}
+                                            <span className={`text-[17px] leading-snug font-semibold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all shadow-sm min-h-[26px] flex items-center justify-center ${isWordActive ? "ring-2 ring-white brightness-150 z-10 text-[#fffffe]" : ""}`}>
                                                 {displayWord}
                                             </span>
-                                            <span className={`text-[10px] mt-1.5 font-mono italic transition-opacity tracking-wide min-h-[16px] ${isWordActive ? "text-[#fffffe] drop-shadow-[0_0_8px_rgba(255,255,255,0.8)] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel}</span>
+                                            {bottomLabel && <span className={`text-[9px] mt-0.5 font-mono italic transition-opacity ${isWordActive ? "text-[#fffffe] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel}</span>}
                                         </div>
                                     );
                                 })}
                             </div>
-                            <p className="text-[#fffffe] opacity-80 text-lg border-t border-white/5 pt-2 mt-1 w-full pl-2 md:pl-4 italic">
+                            <p className="text-[#fffffe] opacity-80 text-[15px] leading-snug border-t border-white/5 pt-1 mt-0.5 w-full">
                                 {line.translation}
                             </p>
                        </div>
