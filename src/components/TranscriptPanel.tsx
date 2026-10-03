@@ -1010,6 +1010,8 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <div className="flex flex-col gap-1 w-full pb-24">
                {lines.map((line, lIdx) => {
                    const isActive = lIdx === activeIndex;
+                   const activeWordIndex = isActive ? getActiveWordIndex(line, currentTime) : -1;
+                   const lineHasBeenRead = line.endTime !== null && line.endTime >= 0 && currentTime >= line.endTime;
                    // Reserve annotation rows consistently across the sentence.
                    // A label on only some words must not move the main text.
                    const hasFurigana = line.words.some(word => !!word.furigana);
@@ -1031,7 +1033,8 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                             )}
                             <div className="flex flex-wrap items-start gap-y-1 gap-x-1 w-full">
                                 {line.words.map((word, idx) => {
-                                    const isWordActive = isActive && getActiveWordIndex(line, currentTime) === idx;
+                                    const isWordActive = isActive && activeWordIndex === idx;
+                                    const hasBeenRead = lineHasBeenRead || (isActive && activeWordIndex > idx);
                                     const displayWord = word.word || word.romaji || " ";
                                     const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
                                     
@@ -1048,7 +1051,16 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                                     return (
                                         <div key={idx} className="grid justify-items-center items-center mx-[1px] leading-none shrink-0 group" style={{ gridTemplateRows: `${hasFurigana ? '12px ' : ''}28px${hasWordLabels ? ' 12px' : ''}` }}>
                                             {hasFurigana && <span aria-hidden={!word.furigana} className={`text-[9px] font-medium whitespace-nowrap transition-colors ${isWordActive ? "text-[#fffffe]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana || '\u00a0'}</span>}
-                                            <span className={`text-[17px] leading-snug font-semibold ${POS_STYLES[word.pos] || POS_STYLES['misc']} group-hover:brightness-125 transition-all shadow-sm h-7 box-border flex items-center justify-center ${isWordActive ? "ring-2 ring-white brightness-150 z-10 text-[#fffffe]" : ""}`}>
+                                            <span
+                                                data-reading-state={isWordActive ? 'current' : hasBeenRead ? 'read' : 'upcoming'}
+                                                aria-current={isWordActive ? 'true' : undefined}
+                                                className={`text-[17px] leading-snug font-semibold ${POS_STYLES[word.pos] || POS_STYLES['misc']} transition-colors duration-100 shadow-sm h-7 box-border flex items-center justify-center ${isWordActive ? "ring-2 ring-[#a78bfa] z-10" : ""}`}
+                                                style={isWordActive
+                                                    ? { color: '#ffffff', backgroundColor: '#7f5af0', borderRadius: '6px', boxShadow: '0 0 10px rgba(127,90,240,0.35)' }
+                                                    : hasBeenRead
+                                                        ? { color: '#4ade80', backgroundColor: 'rgba(74,222,128,0.08)' }
+                                                        : undefined}
+                                            >
                                                 {displayWord}
                                             </span>
                                             {hasWordLabels && <span aria-hidden={!bottomLabel} className={`text-[9px] whitespace-nowrap font-mono italic transition-opacity ${isWordActive ? "text-[#fffffe] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel || '\u00a0'}</span>}
