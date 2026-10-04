@@ -269,7 +269,6 @@ export default function App() {
   const [draggingMarker, setDraggingMarker] = useState<string | null>(null);
   const [fileName, setFileName] = useState(initialData.fileName);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   
   // 新增 transcript state 讓 App 可存儲字串資料以便分享
@@ -916,14 +915,6 @@ export default function App() {
       setError('');
       setSuccessMessage('音檔上傳成功！');
       setTimeout(() => setSuccessMessage(''), 3000);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFile(e.dataTransfer.files[0]);
     }
   };
 
@@ -2267,53 +2258,17 @@ export default function App() {
 
         <div className="secondary-tool px-8 md:px-12 pt-8 md:pt-12">
           <div className="mb-8 flex flex-col gap-4">
-            <label className="block text-xs font-bold uppercase tracking-widest opacity-70">載入音檔</label>
-            <div 
-              className={`group border border-dashed p-8 flex flex-col items-center justify-center transition-all cursor-pointer ${isDragging ? 'bg-opacity-10 scale-[1.02]' : 'hover:bg-opacity-5'}`}
-              style={{ 
-                borderColor: isDragging ? colors.button : colors.stroke,
-                backgroundColor: isDragging ? colors.button : 'transparent'
-              }}
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Upload className="w-10 h-10 mb-3 opacity-60 transition-transform group-hover:-translate-y-1" style={{ color: isDragging ? colors.button : colors.paragraph }} />
-              <p className="font-bold mb-1" style={{ color: colors.headline }}>點擊或拖曳音檔/字幕 (.srt, .vtt) 至此處</p>
-              <p className="text-xs opacity-60 mb-3" style={{ color: colors.paragraph }}>支援音檔 (MP3, WAV, M4A, AAC) 與自訂字幕檔 (SRT, VTT)</p>
-              
-              {/* Flex layout container for loaded assets */}
-              <div className="flex flex-col md:flex-row gap-3 mt-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm hover:bg-white/5" style={{ borderColor: colors.stroke, color: colors.headline }}>
+                <Upload className="w-4 h-4" />上傳音檔
+              </button>
                 {fileName && (
                   <div className="flex items-center gap-2 px-3 py-1.5 border" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
                     <FileAudio className="w-4 h-4" style={{ color: colors.button }} />
                     <span className="text-sm font-mono truncate max-w-[200px] md:max-w-[300px]" style={{ color: colors.headline }}>{fileName}</span>
                   </div>
                 )}
-                {transcriptLines.length > 0 && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 border relative group/sub" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
-                    <FileText className="w-4 h-4 text-[#7f5af0]" />
-                    <span className="text-sm font-mono" style={{ color: colors.headline }}>
-                      已匯入自訂字幕 ({transcriptLines.length} 句)
-                    </span>
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTranscriptLines([]);
-                        setSuccessMessage('字幕已清除！');
-                        setTimeout(() => setSuccessMessage(''), 2500);
-                      }}
-                      className="text-[10px] ml-1 px-1.5 py-0.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
-                      title="清除字幕"
-                    >
-                      清除
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.m4a,.aac,.srt,.vtt" onChange={(e) => { if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]); }} />
+              <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.m4a,.aac" onChange={(e) => { if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]); }} />
             </div>
 
             <div className="flex items-center gap-4 my-2">
