@@ -10,6 +10,7 @@ import LZString from 'lz-string';
 
 import TranscriptPanel, { SubtitleLine } from './components/TranscriptPanel';
 import { DailymotionPlayer } from './DailymotionPlayer';
+import { playbackMediaKey, usePlaybackMemory } from './utils/playbackMemory';
 
 // Web Audio API Audio Slicing Utility
 function sliceAudioBuffer(
@@ -236,6 +237,7 @@ export default function App() {
       fileName: finalFileName,
       pointA: finalPointA,
       pointB: finalPointB,
+      sharedStart: params.a !== null || params.b !== null ? Math.max(0, params.a ?? 0) : null,
       autoPlay
     };
   }, []);
@@ -388,7 +390,15 @@ export default function App() {
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [focusToolsOpen, setFocusToolsOpen] = useState(false);
-  const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // 正值讓字幕提前，負值讓字幕延後
+  const mediaMemoryKey = playbackMediaKey(audioUrl, uploadedFile);
+  const { subtitleOffset, setSubtitleOffset, initialTime: resumeTime, restorePosition,
+    rememberProgress, flush: savePlayback } = usePlaybackMemory(mediaMemoryKey, initialData.sharedStart);
+  useEffect(() => {
+    lastLoadedUrl.current = '';
+    setCurrentTime(0);
+    setDuration(0);
+  }, [audioUrl]);
+  useEffect(() => { if (!isPlaying) savePlayback(); }, [isPlaying, savePlayback]);
   const subtitleTimeShift = subtitleOffset * (playbackRate >= 1
     ? 1 + (playbackRate - 1) * 0.4 : 1 - (1 - playbackRate) * 0.6);
 
@@ -2004,6 +2014,15 @@ export default function App() {
     setError('');
   };
 
+  const restoreMediaPosition = () => {
+    const target = restorePosition(playerRef.current?.getDuration?.());
+    if (target === null) return;
+    // A remembered position outside an old A/B range should still resume there.
+    if ((pointA !== null && target < pointA) || (pointB !== null && target >= pointB)) setIsRepeatEnabled(false);
+    playerRef.current?.seekTo(target, 'seconds');
+    setCurrentTime(target);
+  };
+
   const handleShare = async () => {
     if (!audioUrl) {
       alert("❌ 目前沒有可分享的音檔。");
@@ -2333,11 +2352,12 @@ export default function App() {
                       <DailymotionPlayer
                         videoId={dmVideoId}
                         playerId={dailymotionPlayerId}
-                        initialTime={pointA}
+                        initialTime={resumeTime}
                         playing={isPlaying}
                         volume={activeVolume}
                         playbackRate={playbackRate}
                         onProgress={(state) => {
+                          if (!rememberProgress(state.playedSeconds)) return;
                           setCurrentTime(state.playedSeconds);
                         }}
                         onDuration={(dur) => setDuration(dur)}
@@ -2352,6 +2372,7 @@ export default function App() {
                         onReady={() => {
                           if (lastLoadedUrl.current === audioUrl) return;
                           lastLoadedUrl.current = audioUrl;
+                          restoreMediaPosition();
                           setError('');
                           setSuccessMessage('影片載入成功！');
                           setTimeout(() => setSuccessMessage(''), 3000);
@@ -2360,6 +2381,7 @@ export default function App() {
                       />
                     ) : (
                     <Player
+                      key={audioUrl}
                       ref={(player: any) => {
                         if (player) {
                           playerRef.current = player;
@@ -2376,7 +2398,7 @@ export default function App() {
                         if (boostContext?.state === 'suspended') void boostContext.resume();
                         setIsPlaying(true);
                       }}
-                      onPause={() => setIsPlaying(false)}
+                      onPause={() => { setIsPlaying(false); savePlayback(); }}
                       onEnded={() => {
                         if (isRepeatEnabled) {
                           if (pointA !== null) {
@@ -2390,15 +2412,14 @@ export default function App() {
                       }}
                       progressInterval={100}
                       onProgress={(state: any) => {
+                        if (!rememberProgress(state.playedSeconds)) return;
                         setCurrentTime(state.playedSeconds);
                       }}
                       onDuration={(dur: number) => setDuration(dur)}
                       onReady={() => {
                         if (lastLoadedUrl.current === audioUrl) return;
                         lastLoadedUrl.current = audioUrl;
-                        if (pointA !== null && playerRef.current) {
-                          playerRef.current.seekTo(pointA, 'seconds');
-                        }
+                        restoreMediaPosition();
                         setError('');
                         setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
                         setTimeout(() => setSuccessMessage(''), 3000);
