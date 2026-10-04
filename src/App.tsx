@@ -389,6 +389,8 @@ export default function App() {
   const [focusMode, setFocusMode] = useState(false);
   const [focusToolsOpen, setFocusToolsOpen] = useState(false);
   const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // 正值讓字幕提前，負值讓字幕延後
+  const subtitleTimeShift = subtitleOffset * (playbackRate >= 1
+    ? 1 + (playbackRate - 1) * 0.4 : 1 - (1 - playbackRate) * 0.6);
 
   const syncTime = useMemo(() => {
     // 依據不同播放速率（playbackRate）實行自動補償
@@ -1981,6 +1983,25 @@ export default function App() {
     if (playerRef.current) {
       playerRef.current.seekTo(currentTime + amount, 'seconds');
     }
+  };
+
+  const loopSubtitleLine = (line: SubtitleLine) => {
+    if (!audioUrl || !playerRef.current || line.startTime === null || line.endTime === null
+      || !Number.isFinite(line.startTime) || !Number.isFinite(line.endTime)
+      || line.startTime < 0 || line.endTime <= line.startTime) return;
+    const start = Math.max(0, line.startTime - subtitleTimeShift);
+    const end = duration > 0 ? Math.min(duration, line.endTime - subtitleTimeShift) : line.endTime - subtitleTimeShift;
+    if (end <= start) { setError('這句字幕的時間超出目前媒體範圍。'); return; }
+    setPointA(start);
+    setPointB(end);
+    setIsRepeatEnabled(true);
+    targetSeekRef.current = start;
+    playerRef.current.seekTo(start, 'seconds');
+    setCurrentTime(start);
+    setIsPlaying(true);
+    if (seekClearTimer.current) clearTimeout(seekClearTimer.current);
+    seekClearTimer.current = setTimeout(() => { targetSeekRef.current = null; }, 500);
+    setError('');
   };
 
   const handleShare = async () => {
@@ -4019,6 +4040,10 @@ export default function App() {
           onLinesChange={setTranscriptLines}
           subtitleOffset={subtitleOffset}
           onSubtitleOffsetChange={setSubtitleOffset}
+          onLoopLine={loopSubtitleLine}
+          loopStart={pointA === null ? null : pointA + subtitleTimeShift}
+          loopEnd={pointB === null ? null : pointB + subtitleTimeShift}
+          loopEnabled={isRepeatEnabled}
         />
       </div>
     </div>
