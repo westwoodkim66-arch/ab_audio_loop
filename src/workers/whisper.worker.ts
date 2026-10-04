@@ -27,7 +27,7 @@ self.onmessage = async (event: MessageEvent<{ audio: ArrayBuffer }>) => {
     self.postMessage({ type: 'status', message: 'Whisper 正在辨識語音…' });
     const output = await transcriber(new Float32Array(event.data.audio), {
       task: 'transcribe',
-      return_timestamps: true,
+      return_timestamps: 'word',
       chunk_length_s: 30,
       stride_length_s: 5,
     });
