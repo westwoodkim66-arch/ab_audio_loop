@@ -3,6 +3,7 @@ import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
 import { resegmentTimedTranscript } from '../utils/transcriptSegmentation';
 import { attachWordTimings, hasCompleteWordTimings } from '../utils/wordTiming';
+import { readTranscriptCache, writeTranscriptCache, transcriptMediaKey, type TranscriptMode } from '../utils/transcriptCache';
 
 export interface POSWord {
   word: string;
@@ -75,6 +76,26 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const whisperWorkerRef = useRef<Worker | null>(null);
+  const [lastTranscriptMode, setLastTranscriptMode] = useState<TranscriptMode>('native');
+  const mediaKey = transcriptMediaKey(audioUrl);
+  const requestedLanguage = 'auto';
+  const transcriptRequestRef = useRef(0);
+  const previousCacheMediaRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const request = ++transcriptRequestRef.current;
+    const firstMedia = previousCacheMediaRef.current === null;
+    previousCacheMediaRef.current = mediaKey;
+    if (!mediaKey || (firstMedia && initialLines.length > 0)) return;
+    void readTranscriptCache(mediaKey).then(cached => {
+      if (request !== transcriptRequestRef.current || !cached?.lines?.length) return;
+      setLines(cached.lines);
+      setPlaceholderCount(cached.placeholderCount);
+      setLastTranscriptMode(cached.mode);
+      setStatusText(`已直接載入已保存的 ${cached.language === 'und' ? '' : cached.language + ' '}字幕`);
+    });
+    return () => { ++transcriptRequestRef.current; };
+  }, [mediaKey]);
 
   const getActiveWordIndex = (line: SubtitleLine, currentTime: number): number => {
     if (line.startTime === null || line.endTime === null || line.startTime === -1 || line.endTime === -1) return -1;
@@ -321,6 +342,8 @@ ${JSON.stringify(chunk)}
       
       setStatusText("所有文稿處理完成！");
       setTimeout(() => setStatusText(""), 3000);
+      setIsProcessing(false);
+      return processedChunks.flat();
     } catch (e: any) {
       setStatusText(`處理中斷: ${e.message}`);
       console.error(e);
@@ -477,7 +500,9 @@ ${JSON.stringify(chunk)}
     }
   };
 
-  const loadRemoteTranscript = async (mode: 'native' | 'generate') => {
+  const loadRemoteTranscript = async (mode: TranscriptMode, refresh = false) => {
+    ++transcriptRequestRef.current;
+    setLastTranscriptMode(mode);
     const isYoutube = /(?:youtube\.com|youtu\.be)/i.test(audioUrl);
     if (!audioUrl || (mode === 'native' && !isYoutube)) {
       setStatusText(mode === 'native' ? "原生字幕只支援 YouTube 網址。" : "請先載入影片或音檔網址！");
@@ -497,6 +522,22 @@ ${JSON.stringify(chunk)}
     setShowCopyPasteGuide(false);
     
     try {
+      if (mediaKey && !refresh) {
+        const cached = await readTranscriptCache(mediaKey, mode, requestedLanguage);
+        if (cached) {
+          setPlaceholderCount(cached.placeholderCount);
+          if (cached.lines?.length) {
+            setLines(cached.lines);
+            setStatusText(`已從快取載入 ${cached.language === 'und' ? '' : cached.language + ' '}字幕，無需重新辨識與翻譯。`);
+            setIsProcessing(false);
+            return;
+          }
+          setStatusText('已從快取載入原文，正在補上分析與翻譯…');
+          const completed = await processTextWithGemini('', cached.raw);
+          if (completed?.length) await writeTranscriptCache({ ...cached, lines: completed });
+          return;
+        }
+      }
       const parseResponse = async (res: Response) => {
         const payload = await res.json().catch(() => ({}));
         if (!res.ok && res.status !== 202) {
@@ -543,8 +584,11 @@ ${JSON.stringify(chunk)}
       setPlaceholderCount(mode === 'native' ? musicMarkers : 0);
       
       const detectedLanguage = data.language || transcript[0]?.lang;
+      const entry = { media: mediaKey || '', language: detectedLanguage || 'und', requestedLanguage, mode, raw: mapped, placeholderCount: mode === 'native' ? musicMarkers : 0 };
+      if (mediaKey) await writeTranscriptCache(entry);
       setStatusText(detectedLanguage ? `已取得 ${detectedLanguage} ${mode === 'generate' ? 'AI' : '原生'}字幕，正在分析與翻譯…` : "正在進行語言分析與翻譯…");
-      await processTextWithGemini("", mapped); 
+      const completed = await processTextWithGemini("", mapped);
+      if (mediaKey && completed?.length) await writeTranscriptCache({ ...entry, lines: completed });
       
     } catch(e: any) {
       setStatusText(`${mode === 'generate' ? 'AI 語音辨識' : '讀取'}失敗：${e.message}`);
@@ -890,6 +934,14 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                className="px-3 py-1.5 rounded-lg bg-[#72757e] text-white flex items-center gap-1.5 text-sm font-bold opacity-90 hover:opacity-100 disabled:opacity-50 transition-all">
                 <Upload className="w-4 h-4" />
                 上傳圖檔/字幕
+            </button>
+            <button
+               type="button"
+               onClick={() => loadRemoteTranscript(lastTranscriptMode, true)}
+               disabled={isProcessing || !mediaKey}
+               title="略過已保存的字幕，重新讀取並更新目前辨識模式的結果"
+               className="px-3 py-1.5 rounded-lg border border-white/10 text-[#94a1b2] text-sm disabled:opacity-50 hover:text-white">
+               重新讀取字幕
             </button>
             <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} accept="image/*,.srt,.vtt,.txt" className="hidden" />
         </div>
