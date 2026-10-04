@@ -12,11 +12,11 @@ body {
 .focus-mode { padding: 8px; }
 .focus-empty-hint { display: none; }
 .focus-mode:not(.focus-tools-open) .focus-empty-hint { display: block; }
-.focus-mode .reading-mode-toolbar { position: sticky; top: 0; z-index: 60; }
+.focus-mode .reading-mode-toolbar { position: relative; order: 0; }
 .focus-mode:not(.focus-tools-open) .secondary-tool { display: none; }
 .focus-mode .app-card { display: flex; flex-direction: column; }
 .focus-mode .app-card > .secondary-tool { order: 4; }
-.focus-mode #sticky-header { order: 1; top: 60px; }
+.focus-mode #sticky-header { order: 1; top: 0; }
 .focus-mode .ab-controls { order: 2; padding: 8px 12px; }
 .focus-mode .transcript-panel { order: 3; margin-top: 8px; }
 .focus-mode .transcript-panel > div:first-child { padding: 10px; gap: 8px; }
