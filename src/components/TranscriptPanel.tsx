@@ -77,6 +77,13 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const whisperWorkerRef = useRef<Worker | null>(null);
   const [lastTranscriptMode, setLastTranscriptMode] = useState<TranscriptMode>('native');
+  const [subtitleFontSize, setSubtitleFontSize] = useState(() => {
+    try { const saved = Number(localStorage.getItem('ab_subtitle_font_size')); return saved >= 14 && saved <= 28 ? saved : 17; }
+    catch { return 17; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('ab_subtitle_font_size', String(subtitleFontSize)); } catch {}
+  }, [subtitleFontSize]);
   const mediaKey = transcriptMediaKey(audioUrl);
   const requestedLanguage = 'auto';
   const transcriptRequestRef = useRef(0);
@@ -880,8 +887,14 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <FileText className="w-5 h-5 text-[#7f5af0]" />
             智慧雙語點讀字幕
         </h2>
+        <label className="flex items-center gap-2 text-sm text-white">
+          字體大小
+          <select aria-label="字幕字體大小" value={subtitleFontSize} onChange={event => setSubtitleFontSize(Number(event.target.value))} className="bg-[#242629] border border-white/20 rounded-lg px-2 py-2">
+            {[14, 15, 17, 19, 21, 24, 28].map(size => <option key={size} value={size}>{size}px</option>)}
+          </select>
+        </label>
         
-        <div className="flex flex-wrap gap-2 items-center">
+        <div className="secondary-tool flex flex-wrap gap-2 items-center">
             {onSubtitleOffsetChange && (
               <div className="flex items-center rounded-lg border border-white/10 bg-black/20 overflow-hidden text-xs font-bold text-white" title="說話比字幕早：按「字幕提前」；說話比字幕晚：按「字幕延後」">
                 <button
@@ -960,8 +973,11 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
       )}
 
       {lines.length === 0 && (
+        <p className="focus-empty-hint p-3 text-sm text-[#94a1b2]">尚未載入字幕，請按「展開其他工具」讀取或匯入字幕。</p>
+      )}
+      {lines.length === 0 && (
          <div 
-            className="p-6 transition-all"
+            className="secondary-tool p-6 transition-all"
             onDragOver={(e) => { e.preventDefault(); setIsPanelDragging(true); }}
             onDragLeave={(e) => { e.preventDefault(); setIsPanelDragging(false); }}
             onDrop={handlePanelDrop}
@@ -1016,7 +1032,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
 
       {lines.length > 0 && (
         <div ref={scrollContainerRef} className="transcript-scroll p-3 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all max-h-[60dvh] overflow-y-auto styled-scrollbar">
-            <div className="flex border-b border-white/5 pb-4 mb-4 gap-4 items-center">
+            <div className="secondary-tool flex border-b border-white/5 pb-4 mb-4 gap-4 items-center">
               <span className="text-sm font-bold text-[#94a1b2]">詞性標記：</span>
               <div className="flex flex-wrap gap-2 text-[10px] items-center">
                  <span className="px-2 py-0.5 rounded-md bg-[#e2b714]/20 text-[#e2b714] border border-[#e2b714]/30">名詞</span>
@@ -1091,17 +1107,17 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                                     const bottomLabel = displayRomaji || posLabel;
 
                                     return (
-                                        <div key={idx} className="grid justify-items-center items-center mx-[1px] leading-none shrink-0 group" style={{ gridTemplateRows: `${hasFurigana ? '12px ' : ''}28px${hasWordLabels ? ' 12px' : ''}` }}>
+                                        <div key={idx} className="grid justify-items-center items-center mx-[1px] leading-none shrink-0 group" style={{ gridTemplateRows: `${hasFurigana ? '12px ' : ''}${subtitleFontSize + 11}px${hasWordLabels ? ' 12px' : ''}` }}>
                                             {hasFurigana && <span aria-hidden={!word.furigana} className={`text-[9px] font-medium whitespace-nowrap transition-colors ${isWordActive ? "text-[#fffffe]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana || '\u00a0'}</span>}
                                             <span
                                                 data-reading-state={isWordActive ? 'current' : hasBeenRead ? 'read' : 'upcoming'}
                                                 aria-current={isWordActive ? 'true' : undefined}
                                                 className={`text-[17px] leading-snug font-semibold ${POS_STYLES[word.pos] || POS_STYLES['misc']} transition-colors duration-100 shadow-sm h-7 box-border flex items-center justify-center ${isWordActive ? "ring-2 ring-[#a78bfa] z-10" : ""}`}
-                                                style={isWordActive
+                                                style={{ fontSize: subtitleFontSize, height: subtitleFontSize + 11, ...(isWordActive
                                                     ? { color: '#ffffff', backgroundColor: '#7f5af0', borderRadius: '6px', boxShadow: '0 0 10px rgba(127,90,240,0.35)' }
                                                     : hasBeenRead
                                                         ? { color: '#4ade80', backgroundColor: 'rgba(74,222,128,0.08)' }
-                                                        : undefined}
+                                                        : {}) }}
                                             >
                                                 {displayWord}
                                             </span>
@@ -1110,7 +1126,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                                     );
                                 })}
                             </div>
-                            <p className="text-[#fffffe] opacity-80 text-[15px] leading-snug border-t border-white/5 pt-1 mt-0.5 w-full">
+                            <p style={{ fontSize: Math.max(13, subtitleFontSize - 2) }} className="text-[#fffffe] opacity-80 text-[15px] leading-snug border-t border-white/5 pt-1 mt-0.5 w-full">
                                 {line.translation}
                             </p>
                        </div>
