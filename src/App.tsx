@@ -2196,14 +2196,6 @@ export default function App() {
 
   return (
     <div className={`min-h-screen flex flex-col items-center py-12 px-4 font-sans relative ${focusMode ? 'focus-mode' : ''} ${focusToolsOpen ? 'focus-tools-open' : ''}`} style={{ backgroundColor: colors.background, color: colors.paragraph }}>
-      <div className="reading-mode-toolbar max-w-4xl w-full flex flex-wrap items-center justify-between gap-2 mb-3 p-2 rounded-xl bg-[#16161a] border border-white/10">
-        <button type="button" aria-pressed={focusMode} onClick={() => { setFocusMode(!focusMode); setFocusToolsOpen(false); }} className="px-3 py-2 rounded-lg bg-[#7f5af0] text-white text-sm font-bold">
-          {focusMode ? '退出專注模式' : '專注模式'}
-        </button>
-        {focusMode && <button type="button" aria-expanded={focusToolsOpen} onClick={() => setFocusToolsOpen(!focusToolsOpen)} className="px-3 py-2 text-sm text-white border border-white/20 rounded-lg">
-          {focusToolsOpen ? '收合其他工具' : '展開其他工具'}
-        </button>}
-      </div>
       
       {successMessage && (
         <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-in fade-in slide-in-from-top-4" style={{ backgroundColor: colors.tertiary, color: colors.background, borderColor: colors.stroke }}>
@@ -2247,21 +2239,27 @@ export default function App() {
       </div>
 
       <div className="app-card max-w-4xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
+        <div className="reading-mode-toolbar flex flex-wrap items-center gap-2 px-4 md:px-8 py-3 rounded-t-2xl bg-[#16161a]">
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm hover:bg-white/5" style={{ borderColor: colors.stroke, color: colors.headline }}>
+            <Upload className="w-4 h-4" />上傳音檔
+          </button>
+          <button type="button" aria-pressed={focusMode} onClick={() => { setFocusMode(!focusMode); setFocusToolsOpen(false); }} className="px-3 py-2 rounded-lg bg-[#7f5af0] text-white text-sm font-bold">
+            {focusMode ? '退出專注模式' : '專注模式'}
+          </button>
+          {focusMode && <button type="button" aria-expanded={focusToolsOpen} onClick={() => setFocusToolsOpen(!focusToolsOpen)} className="px-3 py-2 text-sm text-white border border-white/20 rounded-lg">
+            {focusToolsOpen ? '收合其他工具' : '展開其他工具'}
+          </button>}
+          <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.m4a,.aac" onChange={(e) => { if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]); }} />
+        </div>
         
         <div className="secondary-tool px-8 md:px-12 pt-8 md:pt-12">
           <div className="mb-8 flex flex-col gap-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm hover:bg-white/5" style={{ borderColor: colors.stroke, color: colors.headline }}>
-                <Upload className="w-4 h-4" />上傳音檔
-              </button>
                 {fileName && (
                   <div className="flex items-center gap-2 px-3 py-1.5 border" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
                     <FileAudio className="w-4 h-4" style={{ color: colors.button }} />
                     <span className="text-sm font-mono truncate max-w-[200px] md:max-w-[300px]" style={{ color: colors.headline }}>{fileName}</span>
                   </div>
                 )}
-              <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.m4a,.aac" onChange={(e) => { if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]); }} />
-            </div>
 
             <div className="flex items-center gap-4 my-2">
               <div className="flex-grow h-px" style={{ backgroundColor: colors.stroke }}></div>
