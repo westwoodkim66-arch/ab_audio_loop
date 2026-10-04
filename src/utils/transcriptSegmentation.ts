@@ -55,7 +55,8 @@ export function resegmentTimedTranscript<T extends TimedTranscriptSegment>(items
       continue;
     }
 
-    const sentences = splitSentences(text);
+    // Acoustic word chunks must keep their measured boundaries intact.
+    const sentences = Array.isArray(item.wordTimings) ? [text] : splitSentences(text);
     const duration = Math.max(0.08, Number(item.endTime) - Number(item.startTime));
     const totalWeight = Math.max(1, sentences.reduce((sum, sentence) => sum + sentence.length, 0));
     let consumedWeight = 0;
@@ -104,6 +105,8 @@ export function resegmentTimedTranscript<T extends TimedTranscriptSegment>(items
           ...pending,
           originalText: joinFragments(pending.originalText, text),
           endTime: Math.max(Number(pending.endTime), Number(piece.endTime)),
+          ...(Array.isArray(pending.wordTimings) && Array.isArray(piece.wordTimings)
+            ? { wordTimings: [...pending.wordTimings, ...piece.wordTimings] } : {}),
         };
       } else {
         flush();
