@@ -35,6 +35,8 @@ export interface TranscriptPanelProps {
 
 const PLACEHOLDER_CAPTION = /^[\s♪♫♬]*[\[\(（【]?\s*(?:音楽|音樂|音乐|music|instrumental|applause|掌聲|掌声|拍手)\s*[\]\)）】]?[\s♪♫♬]*$/i;
 
+type SubtitleJob = { controller: AbortController; media: string };
+
 function normalizeTimedTranscript(items: any[]) {
   const sorted = items
     .map((item, index) => ({ ...item, _order: index }))
@@ -88,6 +90,47 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const requestedLanguage = 'auto';
   const transcriptRequestRef = useRef(0);
   const previousCacheMediaRef = useRef<string | null>(null);
+  const activeJobRef = useRef<SubtitleJob | null>(null);
+  const currentMediaRef = useRef(audioUrl);
+  currentMediaRef.current = audioUrl;
+  const lastJobMediaRef = useRef(audioUrl);
+
+  const beginJob = (): SubtitleJob => {
+    activeJobRef.current?.controller.abort();
+    ++transcriptRequestRef.current;
+    const job = { controller: new AbortController(), media: audioUrl };
+    activeJobRef.current = job;
+    return job;
+  };
+  const isCurrentJob = (job: SubtitleJob) => activeJobRef.current === job
+    && !job.controller.signal.aborted && currentMediaRef.current === job.media;
+  const checkJob = (job: SubtitleJob) => {
+    if (!isCurrentJob(job)) throw new DOMException('字幕工作已取消', 'AbortError');
+  };
+  const cancelJob = () => {
+    activeJobRef.current?.controller.abort();
+    ++transcriptRequestRef.current;
+    setIsProcessing(false);
+    setStatusText('已取消字幕處理，已載入的內容保留。');
+  };
+  const waitForPoll = (job: SubtitleJob) => new Promise<void>((resolve, reject) => {
+    checkJob(job);
+    const signal = job.controller.signal;
+    const abort = () => { clearTimeout(timer); reject(new DOMException('已取消', 'AbortError')); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, 2000);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  useEffect(() => {
+    if (lastJobMediaRef.current === audioUrl) return;
+    lastJobMediaRef.current = audioUrl;
+    activeJobRef.current?.controller.abort();
+    setIsProcessing(false);
+    setStatusText('');
+    setLines([]);
+    setPlaceholderCount(0);
+    setActiveIndex(-1);
+    setShowCopyPasteGuide(false);
+  }, [audioUrl]);
 
   useEffect(() => {
     const request = ++transcriptRequestRef.current;
@@ -169,18 +212,24 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
     }
   }, [activeIndex, autoScroll]);
 
-  useEffect(() => () => whisperWorkerRef.current?.terminate(), []);
+  useEffect(() => () => {
+    activeJobRef.current?.controller.abort();
+    whisperWorkerRef.current?.terminate();
+  }, []);
 
-  const fetchGemini = async (options: any) => {
+  const fetchGemini = async (options: any, job: SubtitleJob) => {
     try {
+        checkJob(job);
         const res = await fetch("/api/gemini/generateContent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify(options)
+          body: JSON.stringify(options),
+          signal: job.controller.signal
         });
         
         const textResponse = await res.text();
+        checkJob(job);
         
         let data;
         try {
@@ -207,13 +256,15 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         }
         return { text: data.text };
     } catch (e: any) {
-        console.error("fetchGemini Error:", e);
+        if (e?.name !== 'AbortError') console.error("fetchGemini Error:", e);
         throw e;
     }
   };
 
-  const processTextWithGemini = async (text: string, existingLines?: any[]) => {
+  const processTextWithGemini = async (text: string, existingLines?: any[], job = beginJob()) => {
     try {
+      checkJob(job);
+      setIsProcessing(true);
       // Data to process - split by end of sentence marks, avoiding commas to prevent over-fragmentation
       let rawData = existingLines ? [...existingLines] : text.split(/(?<=[。！？\!\?\n])/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
 
@@ -305,8 +356,8 @@ ${JSON.stringify(chunk)}
               }
             }
           }
-        });
-        
+        }, job);
+        checkJob(job);
         let resText = response.text || "[]";
         if(resText.startsWith("\`\`\`json")) {
           resText = resText.replace(/^\`\`\`json\n/, "").replace(/\n\`\`\`$/, "");
@@ -339,6 +390,7 @@ ${JSON.stringify(chunk)}
       let nextChunkIndex = 0;
       const worker = async () => {
         while (nextChunkIndex < chunks.length) {
+          checkJob(job);
           const chunkIndex = nextChunkIndex++;
           await processChunk(chunks[chunkIndex], chunkIndex);
         }
@@ -346,12 +398,15 @@ ${JSON.stringify(chunk)}
       await Promise.all(
         Array.from({ length: Math.min(MAX_CONCURRENT_CHUNKS, chunks.length) }, () => worker())
       );
+      checkJob(job);
       
       setStatusText("所有文稿處理完成！");
-      setTimeout(() => setStatusText(""), 3000);
+      setTimeout(() => { if (isCurrentJob(job)) setStatusText(""); }, 3000);
       setIsProcessing(false);
       return processedChunks.flat();
     } catch (e: any) {
+      if (!isCurrentJob(job)) return;
+      job.controller.abort();
       setStatusText(`處理中斷: ${e.message}`);
       console.error(e);
     }
@@ -429,14 +484,15 @@ ${JSON.stringify(chunk)}
     return result;
   };
 
-  const decodeAudioTo16kMono = async (url: string) => {
-    const response = await fetch(url);
+  const decodeAudioTo16kMono = async (url: string, job: SubtitleJob) => {
+    const response = await fetch(url, { signal: job.controller.signal });
     if (!response.ok) throw new Error(`無法讀取音檔（HTTP ${response.status}）`);
     const encoded = await response.arrayBuffer();
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     const context = new AudioContextClass();
     try {
       const decoded: AudioBuffer = await context.decodeAudioData(encoded.slice(0));
+      checkJob(job);
       if (decoded.duration > 60 * 60) throw new Error("瀏覽器版 Whisper 目前支援最長 60 分鐘的音檔");
       const targetRate = 16000;
       const targetLength = Math.ceil(decoded.duration * targetRate);
@@ -455,19 +511,33 @@ ${JSON.stringify(chunk)}
     }
   };
 
-  const transcribeLocalWithWhisper = async () => {
+  const transcribeLocalWithWhisper = async (job: SubtitleJob) => {
     setIsProcessing(true);
     setStatusText("正在解碼本機音檔…");
     setShowCopyPasteGuide(false);
     try {
-      const samples = await decodeAudioTo16kMono(audioUrl);
+      const samples = await decodeAudioTo16kMono(audioUrl, job);
+      checkJob(job);
       setStatusText("正在載入免費 Whisper 模型（首次使用時間較長）…");
       if (!whisperWorkerRef.current) {
         whisperWorkerRef.current = new Worker(new URL('../workers/whisper.worker.ts', import.meta.url), { type: 'module' });
       }
       const worker = whisperWorkerRef.current;
       const output: any = await new Promise((resolve, reject) => {
+        const cleanup = () => {
+          worker.removeEventListener('message', onMessage);
+          worker.removeEventListener('error', onError);
+          job.controller.signal.removeEventListener('abort', onAbort);
+        };
+        const onAbort = () => {
+          cleanup();
+          worker.terminate();
+          if (whisperWorkerRef.current === worker) whisperWorkerRef.current = null;
+          reject(new DOMException('已取消', 'AbortError'));
+        };
+        const onError = () => { cleanup(); reject(new Error('Whisper 工作中斷')); };
         const onMessage = (event: MessageEvent<any>) => {
+          if (!isCurrentJob(job)) { onAbort(); return; }
           const message = event.data;
           if (message.type === 'progress') {
             const percent = Number(message.progress?.progress);
@@ -476,16 +546,20 @@ ${JSON.stringify(chunk)}
           } else if (message.type === 'status') {
             setStatusText(message.message);
           } else if (message.type === 'result') {
-            worker.removeEventListener('message', onMessage);
+            cleanup();
             resolve(message.output);
           } else if (message.type === 'error') {
-            worker.removeEventListener('message', onMessage);
+            cleanup();
             reject(new Error(message.message));
           }
         };
         worker.addEventListener('message', onMessage);
+        worker.addEventListener('error', onError);
+        job.controller.signal.addEventListener('abort', onAbort, { once: true });
+        checkJob(job);
         worker.postMessage({ audio: samples.buffer }, [samples.buffer]);
       });
+      checkJob(job);
 
       const chunks = Array.isArray(output?.chunks) ? output.chunks : [];
       const mapped = resegmentTimedTranscript(normalizeTimedTranscript(chunks.map((chunk: any, index: number) => ({
@@ -500,24 +574,25 @@ ${JSON.stringify(chunk)}
       if (mapped.length === 0) throw new Error("Whisper 未辨識出可用語音");
       setPlaceholderCount(0);
       setStatusText(`Whisper 已辨識 ${mapped.length} 段，正在分析與翻譯…`);
-      await processTextWithGemini("", mapped);
+      await processTextWithGemini("", mapped, job);
     } catch (error: any) {
+      if (!isCurrentJob(job)) return;
       setStatusText(`AI 語音辨識失敗：${error.message}`);
       setIsProcessing(false);
     }
   };
 
   const loadRemoteTranscript = async (mode: TranscriptMode, refresh = false) => {
-    ++transcriptRequestRef.current;
+    const job = beginJob();
     setLastTranscriptMode(mode);
     const isYoutube = /(?:youtube\.com|youtu\.be)/i.test(audioUrl);
     if (!audioUrl || (mode === 'native' && !isYoutube)) {
       setStatusText(mode === 'native' ? "原生字幕只支援 YouTube 網址。" : "請先載入影片或音檔網址！");
-      setTimeout(() => setStatusText(""), 3000);
+      setTimeout(() => { if (isCurrentJob(job)) setStatusText(""); }, 3000);
       return;
     }
     if (mode === 'generate' && audioUrl.startsWith('blob:')) {
-      await transcribeLocalWithWhisper();
+      await transcribeLocalWithWhisper(job);
       return;
     }
     if (!/^https?:\/\//i.test(audioUrl)) {
@@ -531,6 +606,7 @@ ${JSON.stringify(chunk)}
     try {
       if (mediaKey && !refresh) {
         const cached = await readTranscriptCache(mediaKey, mode, requestedLanguage);
+        checkJob(job);
         if (cached) {
           setPlaceholderCount(cached.placeholderCount);
           if (cached.lines?.length) {
@@ -540,20 +616,21 @@ ${JSON.stringify(chunk)}
             return;
           }
           setStatusText('已從快取載入原文，正在補上分析與翻譯…');
-          const completed = await processTextWithGemini('', cached.raw);
-          if (completed?.length) await writeTranscriptCache({ ...cached, lines: completed });
+          const completed = await processTextWithGemini('', cached.raw, job);
+          if (completed?.length && isCurrentJob(job)) await writeTranscriptCache({ ...cached, lines: completed });
           return;
         }
       }
       const parseResponse = async (res: Response) => {
         const payload = await res.json().catch(() => ({}));
+        checkJob(job);
         if (!res.ok && res.status !== 202) {
           throw new Error(payload.message || payload.error || "無可用字幕或發生錯誤");
         }
         return payload;
       };
 
-      let res = await fetch(`/api/yt-transcript?url=${encodeURIComponent(audioUrl)}&mode=${mode}`);
+      let res = await fetch(`/api/yt-transcript?url=${encodeURIComponent(audioUrl)}&mode=${mode}`, { signal: job.controller.signal });
       let data = await parseResponse(res);
 
       if (res.status === 202) {
@@ -563,8 +640,9 @@ ${JSON.stringify(chunk)}
         let completed = false;
         for (let attempt = 1; attempt <= 40; attempt++) {
           setStatusText(`${mode === 'generate' ? 'AI 語音辨識' : '字幕'}處理中…（${attempt}/40）`);
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          res = await fetch(`/api/yt-transcript?jobId=${encodeURIComponent(jobId)}`);
+          await waitForPoll(job);
+          checkJob(job);
+          res = await fetch(`/api/yt-transcript?jobId=${encodeURIComponent(jobId)}`, { signal: job.controller.signal });
           data = await parseResponse(res);
           if (res.status !== 202) {
             completed = true;
@@ -593,11 +671,13 @@ ${JSON.stringify(chunk)}
       const detectedLanguage = data.language || transcript[0]?.lang;
       const entry = { media: mediaKey || '', language: detectedLanguage || 'und', requestedLanguage, mode, raw: mapped, placeholderCount: mode === 'native' ? musicMarkers : 0 };
       if (mediaKey) await writeTranscriptCache(entry);
+      checkJob(job);
       setStatusText(detectedLanguage ? `已取得 ${detectedLanguage} ${mode === 'generate' ? 'AI' : '原生'}字幕，正在分析與翻譯…` : "正在進行語言分析與翻譯…");
-      const completed = await processTextWithGemini("", mapped);
-      if (mediaKey && completed?.length) await writeTranscriptCache({ ...entry, lines: completed });
+      const completed = await processTextWithGemini("", mapped, job);
+      if (mediaKey && completed?.length && isCurrentJob(job)) await writeTranscriptCache({ ...entry, lines: completed });
       
     } catch(e: any) {
+      if (!isCurrentJob(job)) return;
       setStatusText(`${mode === 'generate' ? 'AI 語音辨識' : '讀取'}失敗：${e.message}`);
       setIsProcessing(false);
       setShowCopyPasteGuide(mode === 'native');
@@ -671,7 +751,7 @@ ${JSON.stringify(chunk)}
     return lines;
   };
 
-  const parseImageToMappedLines = (file: File): Promise<any[]> => {
+  const parseImageToMappedLines = (file: File, job: SubtitleJob): Promise<any[]> => {
     return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = async (event) => {
@@ -717,7 +797,8 @@ Each object MUST have:
                                         ]
                                     }
                                 ]
-                            });
+                            }, job);
+                            checkJob(job);
                             
                             let resText = (response?.text || "[]").trim();
                             if(resText.startsWith("```json")) {
@@ -756,19 +837,23 @@ Each object MUST have:
   };
 
   const processMultipleFiles = async (files: FileList | File[]) => {
+    const job = beginJob();
     setIsProcessing(true);
     let allMappedLines: any[] = [];
     let combinedText = "";
     
     for (let i = 0; i < files.length; i++) {
+        if (!isCurrentJob(job)) return;
         const file = files[i];
         setStatusText(`正在處理檔案 ${i + 1}/${files.length}: ${file.name}...`);
         
         if (file.type.startsWith('image/')) {
-            const lines = await parseImageToMappedLines(file);
+            const lines = await parseImageToMappedLines(file, job);
+            if (!isCurrentJob(job)) return;
             if (lines.length > 0) allMappedLines.push(...lines);
         } else {
             const text = await file.text();
+            if (!isCurrentJob(job)) return;
             if (file.name.toLowerCase().endsWith('.srt') || file.name.toLowerCase().endsWith('.vtt')) {
                 const lines = parseSubtitles(text, file.name);
                 if (lines.length > 0) allMappedLines.push(...lines);
@@ -790,7 +875,7 @@ Each object MUST have:
 
     if (allMappedLines.length > 0) {
         setStatusText("所有檔案解析完成，正在進行語言分析與翻譯...");
-        await processTextWithGemini("", allMappedLines);
+        await processTextWithGemini("", allMappedLines, job);
     } else {
         setStatusText("無法解析任何內容。");
         setIsProcessing(false);
@@ -813,6 +898,7 @@ Each object MUST have:
 
   const translateToLanguage = async (targetLanguage: string) => {
     if (lines.length === 0) return;
+    const job = beginJob();
     setIsProcessing(true);
     setStatusText(`正在翻譯至 ${targetLanguage}...`);
 
@@ -849,8 +935,8 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                     }
                  }
               }
-            });
-
+            }, job);
+            checkJob(job);
             let resText = response.text || "[]";
              if(resText.startsWith("```json")) {
                resText = resText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
@@ -866,8 +952,9 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             setLines([...translatedLines]);
         }
         setStatusText("翻譯完成！");
-        setTimeout(() => setStatusText(""), 3000);
+        setTimeout(() => { if (isCurrentJob(job)) setStatusText(""); }, 3000);
     } catch(e: any) {
+        if (!isCurrentJob(job)) return;
         setStatusText(`翻譯失敗: ${e.message}`);
         console.error(e);
     }
@@ -893,6 +980,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             {[14, 15, 17, 19, 21, 24, 28].map(size => <option key={size} value={size}>{size}px</option>)}
           </select>
         </label>
+        {isProcessing && <button type="button" onClick={cancelJob} className="px-3 py-2 rounded-lg border border-red-400/50 text-red-300 text-sm font-bold">取消字幕處理</button>}
         
         <div className="secondary-tool flex flex-wrap gap-2 items-center">
             {onSubtitleOffsetChange && (
