@@ -387,6 +387,8 @@ export default function App() {
   const [previewTime, setPreviewTime] = useState<number | null>(null);
   const [isHoveringBar, setIsHoveringBar] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [focusToolsOpen, setFocusToolsOpen] = useState(false);
   const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // 正值讓字幕提前，負值讓字幕延後
 
   const syncTime = useMemo(() => {
@@ -2202,7 +2204,15 @@ export default function App() {
   }, [filteredBookmarks, bookmarkSortBy]);
 
   return (
-    <div className="min-h-screen flex flex-col items-center py-12 px-4 font-sans relative" style={{ backgroundColor: colors.background, color: colors.paragraph }}>
+    <div className={`min-h-screen flex flex-col items-center py-12 px-4 font-sans relative ${focusMode ? 'focus-mode' : ''} ${focusToolsOpen ? 'focus-tools-open' : ''}`} style={{ backgroundColor: colors.background, color: colors.paragraph }}>
+      <div className="reading-mode-toolbar max-w-4xl w-full flex flex-wrap items-center justify-between gap-2 mb-3 p-2 rounded-xl bg-[#16161a] border border-white/10">
+        <button type="button" aria-pressed={focusMode} onClick={() => { setFocusMode(!focusMode); setFocusToolsOpen(false); }} className="px-3 py-2 rounded-lg bg-[#7f5af0] text-white text-sm font-bold">
+          {focusMode ? '退出專注模式' : '專注模式'}
+        </button>
+        {focusMode && <button type="button" aria-expanded={focusToolsOpen} onClick={() => setFocusToolsOpen(!focusToolsOpen)} className="px-3 py-2 text-sm text-white border border-white/20 rounded-lg">
+          {focusToolsOpen ? '收合其他工具' : '展開其他工具'}
+        </button>}
+      </div>
       
       {successMessage && (
         <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-in fade-in slide-in-from-top-4" style={{ backgroundColor: colors.tertiary, color: colors.background, borderColor: colors.stroke }}>
@@ -2212,7 +2222,7 @@ export default function App() {
       )}
 
       {/* Keyboard Shortcut Hints Bar */}
-      <div className="max-w-4xl w-full mb-6 p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs font-medium" style={{ borderColor: colors.stroke, backgroundColor: 'rgba(255, 255, 255, 0.01)' }}>
+      <div className="secondary-tool max-w-4xl w-full mb-6 p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs font-medium" style={{ borderColor: colors.stroke, backgroundColor: 'rgba(255, 255, 255, 0.01)' }}>
         <div className="flex items-center gap-2" style={{ color: colors.headline }}>
           <Keyboard className="w-4 h-4 text-[#7f5af0]" />
           <span>鍵盤快捷鍵指南</span>
@@ -2245,9 +2255,9 @@ export default function App() {
         </div>
       </div>
 
-      <div className="max-w-4xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
+      <div className="app-card max-w-4xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
         
-        <div className="p-10 text-center border-b border-opacity-5 rounded-t-2xl md:rounded-t-3xl" style={{ borderColor: colors.paragraph }}>
+        <div className="secondary-tool p-10 text-center border-b border-opacity-5 rounded-t-2xl md:rounded-t-3xl" style={{ borderColor: colors.paragraph }}>
           <h1 className="text-4xl font-bold mb-3 flex items-center justify-center gap-3" style={{ color: colors.headline }}>
             <RotateCcw className="w-10 h-10" />
             AB Repeat 點讀助手
@@ -2255,7 +2265,7 @@ export default function App() {
           <p className="text-lg opacity-90" style={{ color: colors.paragraph }}>精準控制 • 反覆練習 • 輕鬆分享</p>
         </div>
 
-        <div className="px-8 md:px-12 pt-8 md:pt-12">
+        <div className="secondary-tool px-8 md:px-12 pt-8 md:pt-12">
           <div className="mb-8 flex flex-col gap-4">
             <label className="block text-xs font-bold uppercase tracking-widest opacity-70">載入音檔</label>
             <div 
@@ -2768,14 +2778,14 @@ export default function App() {
           </div>
         </div>
 
-        <div className="px-4 md:px-8 pb-3">
+        <div className="ab-controls px-4 md:px-8 pb-3">
           <div className="flex flex-col gap-3">
 
 
               {/* 當前 A/B 循環區間對應的字幕名稱與建議 */}
               {pointA !== null && pointB !== null && (
                 <div 
-                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-[#7f5af0]/10 border border-[#7f5af0]/20 rounded-lg p-3.5 transition-all duration-300"
+                  className="secondary-tool flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-[#7f5af0]/10 border border-[#7f5af0]/20 rounded-lg p-3.5 transition-all duration-300"
                   style={{ borderColor: `${colors.button}30` }}
                 >
                   <div className="flex items-start gap-2.5 min-w-0">
@@ -2917,7 +2927,7 @@ export default function App() {
             </div>
           </div>
         {/* 書籤紀錄與重點標記 */}
-        <div className="mx-8 md:mx-12 mb-8 p-6 rounded-2xl border border-white/5 bg-white/[0.02]" style={{ borderColor: colors.stroke }}>
+        <div className="secondary-tool mx-8 md:mx-12 mb-8 p-6 rounded-2xl border border-white/5 bg-white/[0.02]" style={{ borderColor: colors.stroke }}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 border-b border-white/5 pb-4">
             <div className="flex items-center gap-2.5">
               <span className="p-2 rounded-lg bg-[#7f5af0]/10 text-[#7f5af0] flex items-center justify-center">
@@ -3539,7 +3549,7 @@ export default function App() {
           )}
         </div>
 
-        <div className="p-8 border-t border-opacity-5 flex items-start gap-4" style={{ borderColor: colors.paragraph, backgroundColor: colors.background }}>
+        <div className="secondary-tool p-8 border-t border-opacity-5 flex items-start gap-4" style={{ borderColor: colors.paragraph, backgroundColor: colors.background }}>
           <Info className="w-5 h-5 flex-shrink-0 mt-1 opacity-40" />
           <div className="text-xs leading-relaxed opacity-60">
             <p className="font-bold mb-1" style={{ color: colors.headline }}>使用指南</p>
