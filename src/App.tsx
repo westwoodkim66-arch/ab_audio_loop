@@ -4065,6 +4065,8 @@ export default function App() {
           loopStart={pointA === null ? null : pointA + subtitleTimeShift}
           loopEnd={pointB === null ? null : pointB + subtitleTimeShift}
           loopEnabled={isRepeatEnabled}
+          pointA={pointA}
+          pointB={pointB}
         />
       </div>
     </div>
