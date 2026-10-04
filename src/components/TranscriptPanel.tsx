@@ -463,9 +463,9 @@ ${JSON.stringify(chunk)}
         originalText: String(chunk.text || '').trim(),
         startTime: Number(chunk.timestamp?.[0] ?? 0),
         endTime: Number(chunk.timestamp?.[1] ?? (Number(chunk.timestamp?.[0] ?? 0) + 3)),
-        wordTimings: chunk.timestamp?.[0] != null && chunk.timestamp?.[1] != null
+        ...(output.wordTimestamped ? { wordTimings: chunk.timestamp?.[0] != null && chunk.timestamp?.[1] != null
           ? [{ text: String(chunk.text || ''), startTime: Number(chunk.timestamp[0]), endTime: Number(chunk.timestamp[1]) }]
-          : [],
+          : [] } : {}),
       })).filter((line: any) => line.originalText)));
       if (mapped.length === 0) throw new Error("Whisper 未辨識出可用語音");
       setPlaceholderCount(0);
