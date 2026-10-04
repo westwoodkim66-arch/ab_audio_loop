@@ -31,6 +31,10 @@ export interface TranscriptPanelProps {
   onLinesChange?: (lines: SubtitleLine[]) => void;
   subtitleOffset?: number;
   onSubtitleOffsetChange?: (offset: number) => void;
+  onLoopLine?: (line: SubtitleLine) => void;
+  loopStart?: number | null;
+  loopEnd?: number | null;
+  loopEnabled?: boolean;
 }
 
 const PLACEHOLDER_CAPTION = /^[\s♪♫♬]*[\[\(（【]?\s*(?:音楽|音樂|音乐|music|instrumental|applause|掌聲|掌声|拍手)\s*[\]\)）】]?[\s♪♫♬]*$/i;
@@ -66,7 +70,7 @@ const POS_STYLES: Record<string, string> = {
   misc: "bg-[#94a1b2]/10 text-[#94a1b2] border-b border-[#94a1b2]/30 px-1.5 py-0.5 rounded-md",
 };
 
-export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange, subtitleOffset = 0, onSubtitleOffsetChange }: TranscriptPanelProps) {
+export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange, subtitleOffset = 0, onSubtitleOffsetChange, onLoopLine, loopStart, loopEnd, loopEnabled }: TranscriptPanelProps) {
   const [lines, setLines] = useState<SubtitleLine[]>(initialLines);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState("");
@@ -1157,6 +1161,11 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                    const hasWordTimings = hasCompleteWordTimings(line.words, line.startTime, line.endTime);
                    const activeWordIndex = isActive ? getActiveWordIndex(line, currentTime) : -1;
                    const lineHasBeenRead = line.endTime !== null && line.endTime >= 0 && currentTime >= line.endTime;
+                   const canLoop = !!onLoopLine && typeof line.startTime === 'number' && typeof line.endTime === 'number'
+                     && Number.isFinite(line.startTime) && Number.isFinite(line.endTime) && line.startTime >= 0 && line.endTime > line.startTime;
+                   const isLoopSelected = canLoop && loopEnabled && loopStart !== null && loopStart !== undefined
+                     && loopEnd !== null && loopEnd !== undefined
+                     && Math.abs(loopStart - line.startTime!) < 0.02 && Math.abs(loopEnd - line.endTime!) < 0.02;
                    // Reserve annotation rows consistently across the sentence.
                    // A label on only some words must not move the main text.
                    const hasFurigana = line.words.some(word => !!word.furigana);
@@ -1177,7 +1186,18 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                             {isActive && (
                                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-[#7f5af0] rounded-r-full shadow-[0_0_10px_#7f5af0] animate-pulse"></div>
                             )}
-                            <div className="flex flex-wrap items-start gap-y-1 gap-x-1 w-full">
+                            <div className="flex items-start gap-2 w-full">
+                            {onLoopLine && <button
+                              type="button"
+                              disabled={!canLoop}
+                              aria-label={`循環第 ${lIdx + 1} 句字幕`}
+                              aria-pressed={!!isLoopSelected}
+                              title={canLoop ? '將此句設為 A/B 並循環播放' : '這句字幕沒有有效起訖時間'}
+                              onClick={event => { event.stopPropagation(); if (canLoop) onLoopLine(line); }}
+                              className={`shrink-0 min-h-10 px-2 rounded-lg text-xs font-bold border flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed ${isLoopSelected ? 'bg-[#7f5af0] text-white border-[#7f5af0]' : 'text-[#a78bfa] border-[#7f5af0]/30 hover:bg-[#7f5af0]/20'}`}>
+                              <RotateCcw className="w-4 h-4" />循環
+                            </button>}
+                            <div className="flex flex-wrap items-start gap-y-1 gap-x-1 flex-1 min-w-0">
                                 {line.words.map((word, idx) => {
                                     const isWordActive = isActive && activeWordIndex === idx;
                                     const hasBeenRead = lineHasBeenRead || (hasWordTimings && word.endTime !== undefined && currentTime >= word.endTime);
@@ -1213,6 +1233,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                                         </div>
                                     );
                                 })}
+                            </div>
                             </div>
                             <p style={{ fontSize: Math.max(13, subtitleFontSize - 2) }} className="text-[#fffffe] opacity-80 text-[15px] leading-snug border-t border-white/5 pt-1 mt-0.5 w-full">
                                 {line.translation}
