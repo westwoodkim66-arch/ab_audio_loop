@@ -2248,14 +2248,6 @@ export default function App() {
 
       <div className="app-card max-w-4xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
         
-        <div className="secondary-tool p-10 text-center border-b border-opacity-5 rounded-t-2xl md:rounded-t-3xl" style={{ borderColor: colors.paragraph }}>
-          <h1 className="text-4xl font-bold mb-3 flex items-center justify-center gap-3" style={{ color: colors.headline }}>
-            <RotateCcw className="w-10 h-10" />
-            AB Repeat 點讀助手
-          </h1>
-          <p className="text-lg opacity-90" style={{ color: colors.paragraph }}>精準控制 • 反覆練習 • 輕鬆分享</p>
-        </div>
-
         <div className="secondary-tool px-8 md:px-12 pt-8 md:pt-12">
           <div className="mb-8 flex flex-col gap-4">
             <div className="flex flex-wrap items-center gap-3">
