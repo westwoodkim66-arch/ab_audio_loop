@@ -2,12 +2,15 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
 import { resegmentTimedTranscript } from '../utils/transcriptSegmentation';
+import { attachWordTimings, hasCompleteWordTimings } from '../utils/wordTiming';
 
 export interface POSWord {
   word: string;
   furigana: string;
   romaji: string;
   pos: string;
+  startTime?: number;
+  endTime?: number;
 }
 
 export interface SubtitleLine {
@@ -77,27 +80,9 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
     if (line.startTime === null || line.endTime === null || line.startTime === -1 || line.endTime === -1) return -1;
     if (currentTime < line.startTime || currentTime >= line.endTime) return -1;
     
-    const duration = line.endTime - line.startTime;
-    if (duration <= 0) return -1;
-    
-    const progress = (currentTime - line.startTime) / duration;
-    
-    // Total text length (based on words themselves)
-    const totalChars = line.words.reduce((acc, w) => acc + (w.word || w.romaji || " ").length, 0);
-    if (totalChars === 0) return -1;
-    
-    let currentChars = 0;
-    for (let i = 0; i < line.words.length; i++) {
-        const wordLen = (line.words[i].word || line.words[i].romaji || " ").length;
-        currentChars += wordLen;
-        
-        const wordProgress = currentChars / totalChars;
-        if (progress <= wordProgress) {
-            return i;
-        }
-    }
-    
-    return line.words.length - 1;
+    if (!hasCompleteWordTimings(line.words, line.startTime, line.endTime)) return -1;
+    return line.words.findIndex(word => word.startTime !== undefined && word.endTime !== undefined
+      && currentTime >= word.startTime && currentTime < word.endTime);
   };
 
   // Sync with initialLines if it changes
@@ -311,9 +296,9 @@ ${JSON.stringify(chunk)}
             translation: analyzed.translation || source.providedTranslation || '',
             startTime: source.startTime ?? -1,
             endTime: source.endTime ?? -1,
-            words: Array.isArray(analyzed.words) && analyzed.words.length > 0
+            words: attachWordTimings(Array.isArray(analyzed.words) && analyzed.words.length > 0
               ? analyzed.words
-              : [{ word: source.originalText || '', furigana: '', romaji: '', pos: 'misc' }],
+              : [{ word: source.originalText || '', furigana: '', romaji: '', pos: 'misc' }], source.wordTimings),
           };
         });
         
@@ -478,6 +463,9 @@ ${JSON.stringify(chunk)}
         originalText: String(chunk.text || '').trim(),
         startTime: Number(chunk.timestamp?.[0] ?? 0),
         endTime: Number(chunk.timestamp?.[1] ?? (Number(chunk.timestamp?.[0] ?? 0) + 3)),
+        wordTimings: chunk.timestamp?.[0] != null && chunk.timestamp?.[1] != null
+          ? [{ text: String(chunk.text || ''), startTime: Number(chunk.timestamp[0]), endTime: Number(chunk.timestamp[1]) }]
+          : [],
       })).filter((line: any) => line.originalText)));
       if (mapped.length === 0) throw new Error("Whisper 未辨識出可用語音");
       setPlaceholderCount(0);
@@ -1010,6 +998,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <div className="flex flex-col gap-1 w-full pb-24">
                {lines.map((line, lIdx) => {
                    const isActive = lIdx === activeIndex;
+                   const hasWordTimings = hasCompleteWordTimings(line.words, line.startTime, line.endTime);
                    const activeWordIndex = isActive ? getActiveWordIndex(line, currentTime) : -1;
                    const lineHasBeenRead = line.endTime !== null && line.endTime >= 0 && currentTime >= line.endTime;
                    // Reserve annotation rows consistently across the sentence.
@@ -1025,6 +1014,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                        <div 
                          key={line.id} 
                          data-index={lIdx}
+                         data-highlight-mode={hasWordTimings ? 'word' : 'sentence'}
                          onClick={() => seekToLine(line.startTime)}
                          className={`w-full flex flex-col gap-1 px-2 py-2 rounded-xl transition-all duration-300 cursor-pointer ${isActive ? 'bg-[#7f5af0]/10 border border-[#7f5af0]/50 shadow-lg shadow-[#7f5af0]/20 z-10 opacity-100 relative' : 'bg-transparent border border-transparent opacity-70 hover:opacity-100 hover:bg-white/5'}`}
                        >
@@ -1034,7 +1024,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                             <div className="flex flex-wrap items-start gap-y-1 gap-x-1 w-full">
                                 {line.words.map((word, idx) => {
                                     const isWordActive = isActive && activeWordIndex === idx;
-                                    const hasBeenRead = lineHasBeenRead || (isActive && activeWordIndex > idx);
+                                    const hasBeenRead = lineHasBeenRead || (hasWordTimings && word.endTime !== undefined && currentTime >= word.endTime);
                                     const displayWord = word.word || word.romaji || " ";
                                     const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
                                     
