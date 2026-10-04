@@ -4,6 +4,7 @@ import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircl
 import { resegmentTimedTranscript } from '../utils/transcriptSegmentation';
 import { attachWordTimings, hasCompleteWordTimings } from '../utils/wordTiming';
 import { readTranscriptCache, writeTranscriptCache, transcriptMediaKey, type TranscriptMode } from '../utils/transcriptCache';
+import { resampleAudioRegion, mergeRegionLines, type AudioRegion } from '../utils/whisperRegion';
 
 export interface POSWord {
   word: string;
@@ -35,6 +36,8 @@ export interface TranscriptPanelProps {
   loopStart?: number | null;
   loopEnd?: number | null;
   loopEnabled?: boolean;
+  pointA?: number | null;
+  pointB?: number | null;
 }
 
 const PLACEHOLDER_CAPTION = /^[\s♪♫♬]*[\[\(（【]?\s*(?:音楽|音樂|音乐|music|instrumental|applause|掌聲|掌声|拍手)\s*[\]\)）】]?[\s♪♫♬]*$/i;
@@ -70,7 +73,7 @@ const POS_STYLES: Record<string, string> = {
   misc: "bg-[#94a1b2]/10 text-[#94a1b2] border-b border-[#94a1b2]/30 px-1.5 py-0.5 rounded-md",
 };
 
-export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange, subtitleOffset = 0, onSubtitleOffsetChange, onLoopLine, loopStart, loopEnd, loopEnabled }: TranscriptPanelProps) {
+export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange, subtitleOffset = 0, onSubtitleOffsetChange, onLoopLine, loopStart, loopEnd, loopEnabled, pointA, pointB }: TranscriptPanelProps) {
   const [lines, setLines] = useState<SubtitleLine[]>(initialLines);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState("");
@@ -265,10 +268,12 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
     }
   };
 
-  const processTextWithGemini = async (text: string, existingLines?: any[], job = beginJob()) => {
+  const processTextWithGemini = async (text: string, existingLines?: any[], job = beginJob(), region?: AudioRegion) => {
     try {
       checkJob(job);
       setIsProcessing(true);
+      const previousLines = [...lines];
+      const publish = (next: SubtitleLine[]) => setLines(region ? mergeRegionLines(previousLines, next, region) : next);
       // Data to process - split by end of sentence marks, avoiding commas to prevent over-fragmentation
       let rawData = existingLines ? [...existingLines] : text.split(/(?<=[。！？\!\?\n])/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
 
@@ -291,7 +296,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
       let completedChunks = 0;
 
       // 先顯示原始字幕；詳細翻譯、讀音和詞性在背景並行補上。
-      setLines(placeholderChunks.flat());
+      publish(placeholderChunks.flat());
       setStatusText(`字幕已載入，正在並行分析 ${chunks.length} 批內容...`);
 
       const processChunk = async (chunk: any[], chunkIndex: number) => {
@@ -387,7 +392,7 @@ ${JSON.stringify(chunk)}
         
         processedChunks[chunkIndex] = uniqueParsed;
         completedChunks += 1;
-        setLines(processedChunks.flatMap((processed, index) => processed || placeholderChunks[index]));
+        publish(processedChunks.flatMap((processed, index) => processed || placeholderChunks[index]));
         setStatusText(`已完成 ${completedChunks}/${chunks.length} 批，字幕可先開始點讀...`);
       };
 
@@ -488,39 +493,28 @@ ${JSON.stringify(chunk)}
     return result;
   };
 
-  const decodeAudioTo16kMono = async (url: string, job: SubtitleJob) => {
+  const decodeAudioTo16kMono = async (url: string, job: SubtitleJob, region?: AudioRegion) => {
     const response = await fetch(url, { signal: job.controller.signal });
     if (!response.ok) throw new Error(`無法讀取音檔（HTTP ${response.status}）`);
     const encoded = await response.arrayBuffer();
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     const context = new AudioContextClass();
     try {
-      const decoded: AudioBuffer = await context.decodeAudioData(encoded.slice(0));
+      const decoded: AudioBuffer = await context.decodeAudioData(encoded);
       checkJob(job);
       if (decoded.duration > 60 * 60) throw new Error("瀏覽器版 Whisper 目前支援最長 60 分鐘的音檔");
-      const targetRate = 16000;
-      const targetLength = Math.ceil(decoded.duration * targetRate);
-      const output = new Float32Array(targetLength);
-      const ratio = decoded.sampleRate / targetRate;
-      const channels = Array.from({ length: decoded.numberOfChannels }, (_, channel) => decoded.getChannelData(channel));
-      for (let i = 0; i < targetLength; i++) {
-        const sourceIndex = Math.min(decoded.length - 1, Math.floor(i * ratio));
-        let sample = 0;
-        for (const channel of channels) sample += channel[sourceIndex] || 0;
-        output[i] = sample / channels.length;
-      }
-      return output;
+      return resampleAudioRegion(decoded, region);
     } finally {
       await context.close();
     }
   };
 
-  const transcribeLocalWithWhisper = async (job: SubtitleJob) => {
+  const transcribeLocalWithWhisper = async (job: SubtitleJob, region?: AudioRegion) => {
     setIsProcessing(true);
-    setStatusText("正在解碼本機音檔…");
+    setStatusText(region ? `正在準備 A/B 片段（${(region.end - region.start).toFixed(1)} 秒）…` : "正在解碼本機音檔…");
     setShowCopyPasteGuide(false);
     try {
-      const samples = await decodeAudioTo16kMono(audioUrl, job);
+      const { samples, start, end } = await decodeAudioTo16kMono(audioUrl, job, region);
       checkJob(job);
       setStatusText("正在載入免費 Whisper 模型（首次使用時間較長）…");
       if (!whisperWorkerRef.current) {
@@ -567,18 +561,18 @@ ${JSON.stringify(chunk)}
 
       const chunks = Array.isArray(output?.chunks) ? output.chunks : [];
       const mapped = resegmentTimedTranscript(normalizeTimedTranscript(chunks.map((chunk: any, index: number) => ({
-        id: `whisper_${index}`,
+        id: `whisper_${start}_${index}`,
         originalText: String(chunk.text || '').trim(),
-        startTime: Number(chunk.timestamp?.[0] ?? 0),
-        endTime: Number(chunk.timestamp?.[1] ?? (Number(chunk.timestamp?.[0] ?? 0) + 3)),
+        startTime: Math.min(end, start + Number(chunk.timestamp?.[0] ?? 0)),
+        endTime: Math.min(end, start + Number(chunk.timestamp?.[1] ?? (Number(chunk.timestamp?.[0] ?? 0) + 3))),
         ...(output.wordTimestamped ? { wordTimings: chunk.timestamp?.[0] != null && chunk.timestamp?.[1] != null
-          ? [{ text: String(chunk.text || ''), startTime: Number(chunk.timestamp[0]), endTime: Number(chunk.timestamp[1]) }]
+          ? [{ text: String(chunk.text || ''), startTime: Math.min(end, start + Number(chunk.timestamp[0])), endTime: Math.min(end, start + Number(chunk.timestamp[1])) }]
           : [] } : {}),
-      })).filter((line: any) => line.originalText)));
+      })).filter((line: any) => line.originalText && line.endTime > line.startTime)));
       if (mapped.length === 0) throw new Error("Whisper 未辨識出可用語音");
-      setPlaceholderCount(0);
+      if (!region) setPlaceholderCount(0);
       setStatusText(`Whisper 已辨識 ${mapped.length} 段，正在分析與翻譯…`);
-      await processTextWithGemini("", mapped, job);
+      await processTextWithGemini("", mapped, job, region ? { start, end } : undefined);
     } catch (error: any) {
       if (!isCurrentJob(job)) return;
       setStatusText(`AI 語音辨識失敗：${error.message}`);
@@ -690,6 +684,14 @@ ${JSON.stringify(chunk)}
 
   const loadYoutubeTranscript = () => loadRemoteTranscript('native');
   const loadAiTranscript = () => loadRemoteTranscript('generate');
+  const validRegion = typeof pointA === 'number' && typeof pointB === 'number'
+    && Number.isFinite(pointA) && Number.isFinite(pointB) && pointA >= 0 && pointB > pointA;
+  const embeddedMedia = /(?:youtube\.com|youtu\.be|dailymotion\.com|dai\.ly|vimeo\.com)/i.test(audioUrl);
+  const canReadAudio = !!audioUrl && !embeddedMedia;
+  const loadWhisperRegion = () => {
+    if (!validRegion || !canReadAudio) return;
+    void transcribeLocalWithWhisper(beginJob(), { start: pointA!, end: pointB! });
+  };
 
   const handleManualInput = () => {
     if(!inputText.trim()) return;
@@ -1032,6 +1034,12 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                className="px-3 py-1.5 rounded-lg bg-[#7f5af0] text-white flex items-center gap-1.5 text-sm font-bold opacity-90 hover:opacity-100 disabled:opacity-50 transition-all">
                 <AudioLines className="w-4 h-4" />
                 AI 語音辨識
+            </button>
+            <button type="button" onClick={loadWhisperRegion}
+               disabled={isProcessing || !validRegion || !canReadAudio}
+               title={embeddedMedia ? '嵌入影片無法直接取得音訊，請上傳音檔後使用 Whisper' : !validRegion ? '請先設定有效的 A/B 區間' : '只辨識 A/B 片段，取代重疊字幕並保留其他句子；網路音檔需允許跨來源讀取'}
+               className="px-3 py-1.5 rounded-lg border border-[#7f5af0]/50 text-[#a78bfa] flex items-center gap-1.5 text-sm font-bold disabled:opacity-40 hover:bg-[#7f5af0]/10">
+               <AudioLines className="w-4 h-4" />Whisper 辨識 A/B
             </button>
             <button 
                onClick={() => fileInputRef.current?.click()}
