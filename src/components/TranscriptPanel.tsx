@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
-import { resegmentTimedTranscript } from '../utils/transcriptSegmentation';
+import { resegmentTimedTranscript, prepareReadableTranscript, needsReadableSegmentation } from '../utils/transcriptSegmentation';
 import { attachWordTimings, hasCompleteWordTimings } from '../utils/wordTiming';
 import { readTranscriptCache, writeTranscriptCache, transcriptMediaKey, type TranscriptMode } from '../utils/transcriptCache';
 import { resampleAudioRegion, mergeRegionLines, type AudioRegion } from '../utils/whisperRegion';
@@ -43,6 +43,11 @@ export interface TranscriptPanelProps {
 const PLACEHOLDER_CAPTION = /^[\s♪♫♬]*[\[\(（【]?\s*(?:音楽|音樂|音乐|music|instrumental|applause|掌聲|掌声|拍手)\s*[\]\)）】]?[\s♪♫♬]*$/i;
 
 type SubtitleJob = { controller: AbortController; media: string };
+
+function plainSubtitleWords(text: string): POSWord[] {
+  return (text.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*|[^\s]/gu) || [])
+    .map(word => ({ word, furigana: '', romaji: '', pos: 'misc' }));
+}
 
 function normalizeTimedTranscript(items: any[]) {
   const sorted = items
@@ -144,11 +149,17 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
     const firstMedia = previousCacheMediaRef.current === null;
     previousCacheMediaRef.current = mediaKey;
     if (!mediaKey || (firstMedia && initialLines.length > 0)) return;
-    void readTranscriptCache(mediaKey).then(cached => {
-      if (request !== transcriptRequestRef.current || !cached?.lines?.length) return;
-      setLines(cached.lines);
+    void readTranscriptCache(mediaKey).then(async cached => {
+      if (request !== transcriptRequestRef.current || !cached) return;
       setPlaceholderCount(cached.placeholderCount);
       setLastTranscriptMode(cached.mode);
+      if (!cached.lines?.length) {
+        const job = beginJob();
+        const completed = await processTextWithGemini('', cached.raw, job);
+        if (completed?.length && isCurrentJob(job)) await writeTranscriptCache({ ...cached, lines: completed });
+        return;
+      }
+      setLines(cached.lines);
       setStatusText(`已直接載入已保存的 ${cached.language === 'und' ? '' : cached.language + ' '}字幕`);
     });
     return () => { ++transcriptRequestRef.current; };
@@ -166,7 +177,9 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   // Sync with initialLines if it changes
   useEffect(() => {
     if (initialLines.length > 0) {
-      setLines(initialLines);
+      if (initialLines.some(line => needsReadableSegmentation(line.originalText))) {
+        void processTextWithGemini('', initialLines);
+      } else setLines(initialLines);
     }
   }, [initialLines]);
 
@@ -274,8 +287,12 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
       setIsProcessing(true);
       const previousLines = [...lines];
       const publish = (next: SubtitleLine[]) => setLines(region ? mergeRegionLines(previousLines, next, region) : next);
-      // Data to process - split by end of sentence marks, avoiding commas to prevent over-fragmentation
-      let rawData = existingLines ? [...existingLines] : text.split(/(?<=[。！？\!\?\n])/).filter(t => t.trim().length > 0).map((t, i) => ({ id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1 }));
+      // Apply the same short sentence boundaries to remote captions, pasted text,
+      // imports, shared links and old recognition caches before asking for translation.
+      const input = existingLines || text.split(/\r?\n/).filter(t => t.trim()).map((t, i) => ({
+        id: `manual_${Date.now()}_${i}`, originalText: t.trim(), startTime: -1, endTime: -1
+      }));
+      const rawData = prepareReadableTranscript(input);
 
       const CHUNK_SIZE = 12;
       const MAX_CONCURRENT_CHUNKS = 3;
@@ -289,7 +306,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
           translation: item.providedTranslation || "分析中…",
           startTime: item.startTime ?? -1,
           endTime: item.endTime ?? -1,
-          words: [{ word: item.originalText || "", furigana: "", romaji: "", pos: "misc" }]
+          words: attachWordTimings(plainSubtitleWords(item.originalText || ''), item.wordTimings)
         }))
       );
       const processedChunks: SubtitleLine[][] = new Array(chunks.length);
@@ -378,6 +395,11 @@ ${JSON.stringify(chunk)}
         // Programmatically enforce one output per prepared sentence even if the model ignores instructions.
         const uniqueParsed = chunk.map((source: any, pIdx: number) => {
           const analyzed: any = parsedById.get(String(source.id || '')) || (Array.isArray(parsed) ? parsed[pIdx] : null) || {};
+          const normalized = (value: string) => value.normalize('NFKC').replace(/\s/gu, '');
+          const validWords = Array.isArray(analyzed.words) && analyzed.words.length > 0
+            && !analyzed.words.some((word: any) => /[A-Za-z]/.test(word.word || '') && /\s/.test(String(word.word || '').trim()))
+            && normalized(analyzed.words.map((word: any) => word.word || '').join('')) === normalized(source.originalText || '');
+          const words = validWords ? analyzed.words : plainSubtitleWords(source.originalText || '');
           return {
             ...analyzed,
             id: `${source.id || `line_${Date.now()}`}_${i}_${pIdx}`,
@@ -385,9 +407,7 @@ ${JSON.stringify(chunk)}
             translation: analyzed.translation || source.providedTranslation || '',
             startTime: source.startTime ?? -1,
             endTime: source.endTime ?? -1,
-            words: attachWordTimings(Array.isArray(analyzed.words) && analyzed.words.length > 0
-              ? analyzed.words
-              : [{ word: source.originalText || '', furigana: '', romaji: '', pos: 'misc' }], source.wordTimings),
+            words: attachWordTimings(words, source.wordTimings),
           };
         });
         
