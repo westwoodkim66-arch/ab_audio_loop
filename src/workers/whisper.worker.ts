@@ -1,6 +1,9 @@
 import { env, pipeline } from '@huggingface/transformers';
 
 env.allowLocalModels = false;
+env.useBrowserCache = true;
+// Production serves only this model through the website's streaming endpoint.
+if (!import.meta.env.DEV) env.remoteHost = `${self.location.origin}/api/whisper-model/`;
 
 let transcriberPromise: Promise<any> | null = null;
 
@@ -16,14 +19,20 @@ function getTranscriber() {
           self.postMessage({ type: 'progress', progress });
         },
       },
-    );
+    ).catch(error => {
+      transcriberPromise = null; // A failed download must be retryable.
+      throw error;
+    });
   }
   return transcriberPromise;
 }
 
-self.onmessage = async (event: MessageEvent<{ audio: ArrayBuffer }>) => {
+self.onmessage = async (event: MessageEvent<{ type?: 'prepare'; audio?: ArrayBuffer }>) => {
   try {
     const transcriber = await getTranscriber();
+    self.postMessage({ type: 'model-ready', cacheAvailable: typeof caches !== 'undefined' });
+    if (event.data.type === 'prepare') return;
+    if (!event.data.audio) throw new Error('沒有音訊資料');
     self.postMessage({ type: 'status', message: 'Whisper 正在辨識語音…' });
     const samples = new Float32Array(event.data.audio);
     const options = { task: 'transcribe', chunk_length_s: 30, stride_length_s: 5 };
@@ -39,7 +48,7 @@ self.onmessage = async (event: MessageEvent<{ audio: ArrayBuffer }>) => {
     self.postMessage({ type: 'result', output });
   } catch (error: any) {
     self.postMessage({
-      type: 'error',
+      type: event.data.type === 'prepare' ? 'model-error' : 'error',
       message: error?.message || 'Whisper 語音辨識失敗',
     });
   }
