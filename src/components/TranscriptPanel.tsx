@@ -3,7 +3,7 @@ import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
 import { resegmentTimedTranscript, prepareReadableTranscript, needsReadableSegmentation } from '../utils/transcriptSegmentation';
 import { attachWordTimings, hasCompleteWordTimings, alignSuppliedTranscript } from '../utils/wordTiming';
-import { readTranscriptCache, writeTranscriptCache, transcriptMediaKey, type TranscriptMode } from '../utils/transcriptCache';
+import { readTranscriptCache, writeTranscriptCache, transcriptMediaKey, resolveTranscriptMediaKey, type TranscriptMode } from '../utils/transcriptCache';
 import { resampleAudioRegion, mergeRegionLines, type AudioRegion } from '../utils/whisperRegion';
 
 export interface SubtitleWord {
@@ -87,7 +87,56 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   useEffect(() => {
     try { localStorage.setItem('ab_subtitle_font_size', String(subtitleFontSize)); } catch {}
   }, [subtitleFontSize]);
-  const mediaKey = transcriptMediaKey(audioUrl);
+  const [mediaKey, setMediaKey] = useState<string | null>(() => transcriptMediaKey(audioUrl));
+  const [cacheCheckedMedia, setCacheCheckedMedia] = useState('');
+  const [modelState, setModelState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [modelFiles, setModelFiles] = useState<Record<string, { percent?: number; loaded?: number; total?: number }>>({});
+  const modelPreparedMediaRef = useRef('');
+  const [modelError, setModelError] = useState('');
+  const [modelCacheAvailable, setModelCacheAvailable] = useState(true);
+  useEffect(() => {
+    const controller = new AbortController();
+    setMediaKey(transcriptMediaKey(audioUrl));
+    setCacheCheckedMedia('');
+    if (audioUrl.startsWith('blob:')) void resolveTranscriptMediaKey(audioUrl, controller.signal).then(key => {
+      if (!controller.signal.aborted) setMediaKey(key);
+    });
+    return () => controller.abort();
+  }, [audioUrl]);
+  const ensureWhisperWorker = () => {
+    if (whisperWorkerRef.current) return whisperWorkerRef.current;
+    const worker = new Worker(new URL('../workers/whisper.worker.ts', import.meta.url), { type: 'module' });
+    whisperWorkerRef.current = worker;
+    worker.addEventListener('message', event => {
+      if (whisperWorkerRef.current !== worker) return;
+      const message = event.data;
+      if (message.type === 'progress') {
+        setModelState('loading');
+        const progress = message.progress;
+        if (progress?.file) setModelFiles(previous => ({ ...previous, [progress.file]: {
+          percent: progress.status === 'done' ? 100 : Number.isFinite(progress.progress) ? progress.progress : previous[progress.file]?.percent,
+          loaded: progress.loaded ?? previous[progress.file]?.loaded,
+          total: progress.total ?? previous[progress.file]?.total,
+        } }));
+      } else if (message.type === 'model-ready') {
+        setModelState('ready');
+        setModelCacheAvailable(message.cacheAvailable);
+      } else if (message.type === 'model-error') {
+        setModelState('error'); setModelError(message.message);
+      }
+    });
+    worker.addEventListener('error', () => {
+      if (whisperWorkerRef.current !== worker) return;
+      worker.terminate(); whisperWorkerRef.current = null;
+      setModelState('error'); setModelError('模型載入中斷，請重試。');
+    });
+    return worker;
+  };
+  const prepareWhisperModel = () => {
+    modelPreparedMediaRef.current = audioUrl;
+    setModelState('loading'); setModelError(''); setModelFiles({});
+    ensureWhisperWorker().postMessage({ type: 'prepare' });
+  };
   const requestedLanguage = 'auto';
   const transcriptRequestRef = useRef(0);
   const previousCacheMediaRef = useRef<string | null>(null);
@@ -137,9 +186,11 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
     const request = ++transcriptRequestRef.current;
     const firstMedia = previousCacheMediaRef.current === null;
     previousCacheMediaRef.current = mediaKey;
-    if (!mediaKey || (firstMedia && initialLines.length > 0)) return;
+    if (!mediaKey || (firstMedia && initialLines.length > 0)) { if (!audioUrl.startsWith('blob:')) setCacheCheckedMedia(audioUrl); return; }
     void readTranscriptCache(mediaKey).then(async cached => {
-      if (request !== transcriptRequestRef.current || !cached) return;
+      if (request !== transcriptRequestRef.current) return;
+      setCacheCheckedMedia(audioUrl);
+      if (!cached) return;
       setPlaceholderCount(cached.placeholderCount);
       setLastTranscriptMode(cached.mode);
       if (!cached.lines?.length) {
@@ -519,18 +570,34 @@ ${JSON.stringify(chunk)}
     }
   };
 
-  const transcribeLocalWithWhisper = async (job: SubtitleJob, region?: AudioRegion, referenceLines?: any[]) => {
+  const transcribeLocalWithWhisper = async (job: SubtitleJob, region?: AudioRegion, referenceLines?: any[], refresh = false) => {
+    setLastTranscriptMode('generate');
     setIsProcessing(true);
     setStatusText(region ? `正在準備 A/B 片段（${(region.end - region.start).toFixed(1)} 秒）…` : "正在解碼本機音檔…");
     setShowCopyPasteGuide(false);
     try {
+      const stableKey = mediaKey || await resolveTranscriptMediaKey(audioUrl, job.controller.signal);
+      checkJob(job);
+      const cacheMedia = stableKey && region ? `${stableKey}|whisper:${region.start}:${region.end}` : stableKey;
+      if (cacheMedia && !referenceLines && !refresh) {
+        const cached = await readTranscriptCache(cacheMedia, 'generate', requestedLanguage);
+        checkJob(job);
+        if (cached) {
+          if (cached.lines?.length) {
+            setLines(region ? mergeRegionLines(lines, cached.lines, region) : cached.lines);
+            setStatusText('已直接載入字幕與逐字時間戳，無需再次執行 Whisper。');
+            setIsProcessing(false);
+          } else {
+            const completed = await processTextWithGemini('', cached.raw, job, region);
+            if (completed?.length && isCurrentJob(job)) await writeTranscriptCache({ ...cached, lines: completed });
+          }
+          return;
+        }
+      }
       const { samples, start, end } = await decodeAudioTo16kMono(audioUrl, job, region);
       checkJob(job);
       setStatusText("正在載入免費 Whisper 模型（首次使用時間較長）…");
-      if (!whisperWorkerRef.current) {
-        whisperWorkerRef.current = new Worker(new URL('../workers/whisper.worker.ts', import.meta.url), { type: 'module' });
-      }
-      const worker = whisperWorkerRef.current;
+      const worker = ensureWhisperWorker();
       const output: any = await new Promise((resolve, reject) => {
         const cleanup = () => {
           worker.removeEventListener('message', onMessage);
@@ -540,7 +607,7 @@ ${JSON.stringify(chunk)}
         const onAbort = () => {
           cleanup();
           worker.terminate();
-          if (whisperWorkerRef.current === worker) whisperWorkerRef.current = null;
+          if (whisperWorkerRef.current === worker) { whisperWorkerRef.current = null; setModelState('idle'); }
           reject(new DOMException('已取消', 'AbortError'));
         };
         const onError = () => { cleanup(); reject(new Error('Whisper 工作中斷')); };
@@ -576,9 +643,11 @@ ${JSON.stringify(chunk)}
           startTime: Number(chunk.timestamp?.[0]), endTime: Number(chunk.timestamp?.[1]) }));
         const aligned = alignSuppliedTranscript(prepareReadableTranscript(referenceLines), measured);
         checkJob(job);
+        if (stableKey) await writeTranscriptCache({ media: stableKey, language: 'und', requestedLanguage, mode: 'generate', raw: aligned, placeholderCount: 0 });
+        checkJob(job);
         const completed = await processTextWithGemini('', aligned, job);
-        if (mediaKey && completed?.length && isCurrentJob(job)) {
-          await writeTranscriptCache({ media: mediaKey, language: 'und', requestedLanguage,
+        if (stableKey && completed?.length && isCurrentJob(job)) {
+          await writeTranscriptCache({ media: stableKey, language: 'und', requestedLanguage,
             mode: 'generate', raw: aligned, lines: completed, placeholderCount: 0 });
         }
         if (isCurrentJob(job)) setStatusText('字幕已對上語音時間：有完整時間的句子逐字提示，其餘以整句提示。');
@@ -597,7 +666,11 @@ ${JSON.stringify(chunk)}
       if (mapped.length === 0) throw new Error("Whisper 未辨識出可用語音");
       if (!region) setPlaceholderCount(0);
       setStatusText(`Whisper 已辨識 ${mapped.length} 段，正在分析與翻譯…`);
-      await processTextWithGemini("", mapped, job, region ? { start, end } : undefined);
+      const entry = { media: cacheMedia || '', language: 'und', requestedLanguage, mode: 'generate' as const, raw: mapped, placeholderCount: 0 };
+      if (cacheMedia) await writeTranscriptCache(entry);
+      checkJob(job);
+      const completed = await processTextWithGemini("", mapped, job, region ? { start, end } : undefined);
+      if (cacheMedia && completed?.length && isCurrentJob(job)) await writeTranscriptCache({ ...entry, lines: completed });
     } catch (error: any) {
       if (!isCurrentJob(job)) return;
       setStatusText(`AI 語音辨識失敗：${error.message}`);
@@ -615,7 +688,7 @@ ${JSON.stringify(chunk)}
       return;
     }
     if (mode === 'generate' && audioUrl.startsWith('blob:')) {
-      await transcribeLocalWithWhisper(job);
+      await transcribeLocalWithWhisper(job, undefined, undefined, refresh);
       return;
     }
     if (!/^https?:\/\//i.test(audioUrl)) {
@@ -713,6 +786,11 @@ ${JSON.stringify(chunk)}
     && Number.isFinite(pointA) && Number.isFinite(pointB) && pointA >= 0 && pointB > pointA;
   const embeddedMedia = /(?:youtube\.com|youtu\.be|dailymotion\.com|dai\.ly|vimeo\.com)/i.test(audioUrl);
   const canReadAudio = !!audioUrl && !embeddedMedia;
+  useEffect(() => {
+    // Check the subtitle cache first: revisiting an already recognized file should
+    // not download or initialize Whisper at all.
+    if (canReadAudio && cacheCheckedMedia === audioUrl && !lines.length && modelState === 'idle' && modelPreparedMediaRef.current !== audioUrl) prepareWhisperModel();
+  }, [audioUrl, cacheCheckedMedia, canReadAudio, lines.length, modelState]);
   const loadWhisperRegion = () => {
     if (!validRegion || !canReadAudio) return;
     void transcribeLocalWithWhisper(beginJob(), { start: pointA!, end: pointB! });
@@ -1101,6 +1179,22 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} accept="image/*,.srt,.vtt,.txt" className="hidden" />
         </div>
       </div>
+
+      {modelState !== 'idle' && (
+        <div className="mx-4 mt-3 p-3 rounded-xl border border-[#7f5af0]/30 bg-[#7f5af0]/5 text-sm text-[#fffffe]" role="status" aria-live="polite">
+          <p>{modelState === 'loading' ? 'Whisper 正在背景準備模型，您可以繼續播放音檔。首次會下載，之後優先使用瀏覽器快取。'
+            : modelState === 'ready' ? (modelCacheAvailable ? 'Whisper 模型已就緒；瀏覽器會快取模型，下次優先直接載入。' : 'Whisper 模型已就緒，但此瀏覽器無法保存模型快取。')
+            : `Whisper 模型準備失敗：${modelError}`}</p>
+          {modelState === 'loading' && (Object.entries(modelFiles) as [string, { percent?: number; loaded?: number }][]).map(([file, progress]) => (
+            <div key={file} className="mt-2">
+              <div className="flex justify-between gap-2 text-xs"><span className="truncate">{file}</span>
+                <span>{progress.percent !== undefined ? `${Math.round(progress.percent)}%` : '準備中'}{progress.loaded ? ` · ${(progress.loaded / 1048576).toFixed(1)} MB` : ''}</span></div>
+              <progress aria-label={`${file} 載入進度`} max={100} value={progress.percent} className="w-full h-2 accent-[#7f5af0]" />
+            </div>
+          ))}
+          {modelState === 'error' && <button type="button" onClick={prepareWhisperModel} disabled={isProcessing} className="mt-2 px-3 py-1 rounded-lg border border-[#7f5af0]/50 disabled:opacity-40">重新下載模型</button>}
+        </div>
+      )}
 
       {placeholderCount > 0 && (
         <div className="mx-4 mt-4 p-3 rounded-xl bg-[#e2b714]/10 border border-[#e2b714]/30 text-sm text-[#fffffe] flex flex-wrap items-center justify-between gap-3">
