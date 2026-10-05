@@ -1,6 +1,6 @@
 const DATABASE = 'ab-loop-transcripts';
 const STORE = 'results';
-const VERSION = 1;
+const VERSION = 2;
 const LIMIT = 50;
 
 export type TranscriptMode = 'native' | 'generate';
@@ -56,7 +56,7 @@ export async function readTranscriptCache(media: string, mode?: TranscriptMode, 
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    return entries.filter(entry => entry.media === media && (!mode || entry.mode === mode)
+    return entries.filter(entry => entry.key.startsWith(`[${VERSION},`) && entry.media === media && (!mode || entry.mode === mode)
       && entry.requestedLanguage === requestedLanguage && Array.isArray(entry.raw) && entry.raw.length > 0)
       .sort((a, b) => b.savedAt - a.savedAt)[0] || null;
   } catch { return null; }
