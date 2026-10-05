@@ -38,6 +38,20 @@ export function transcriptMediaKey(value: string): string | null {
   } catch { return null; }
 }
 
+// Blob URLs change on every upload. Hash the actual file so reopening the same
+// local audio restores captions and word timestamps without running Whisper.
+export async function resolveTranscriptMediaKey(value: string, signal?: AbortSignal): Promise<string | null> {
+  if (!value.startsWith('blob:')) return transcriptMediaKey(value);
+  try {
+    const response = await fetch(value, { signal });
+    if (!response.ok) return null;
+    const bytes = await response.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    if (signal?.aborted) return null;
+    return `audio-sha256:${Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')}`;
+  } catch { return null; }
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE, VERSION);
