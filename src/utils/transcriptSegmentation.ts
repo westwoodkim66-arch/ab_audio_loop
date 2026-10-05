@@ -8,8 +8,8 @@ export interface TimedTranscriptSegment {
 
 const TERMINAL_PUNCTUATION = /[.!?。！？…]["'”’」』】）)]*$/;
 const CAPTION_MARKER = /^[\s♪♫♬]*[\[\(（【]?\s*(?:音楽|音樂|音乐|music|instrumental|applause|掌聲|掌声|拍手)\s*[\]\)）】]?[\s♪♫♬]*$/i;
-const MAX_WORDS_PER_CUE = 20;
-const MAX_CHARS_PER_CUE = 110;
+const MAX_WORDS_PER_CUE = 16;
+const MAX_CHARS_PER_CUE = 90;
 const CLAUSE_START_WORDS = new Set(['and', 'but', 'so', 'because', 'while', 'although', 'which', 'who', 'that', 'if', 'when', 'from', 'for', 'with', 'in', 'on', 'at', 'to', 'of']);
 
 function normalizedWords(text: string) { return text.normalize('NFKC').replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase(); }
@@ -32,7 +32,8 @@ function splitAtReadableLimits(sentence: string): string[] {
       let splitAt = -1;
       for (let i = current.length - 1; i >= Math.floor(current.length * 0.55); i--) {
         const firstWord = current[i].trim().split(/\s/, 1)[0].replace(/^[^a-z]+|[^a-z]+$/gi, '').toLowerCase();
-        if (CLAUSE_START_WORDS.has(firstWord)) {
+        if (firstWord === 'to' && /\d/.test(current[i - 1] || '')) continue;
+        if (CLAUSE_START_WORDS.has(firstWord) && lexicalCount(current.slice(i).join('') + part) >= 4) {
           splitAt = i;
           break;
         }
@@ -62,13 +63,12 @@ function splitMeasuredWords<T extends TimedTranscriptSegment>(item: T, text: str
   for (const timing of timings) {
     const token = String(timing.text);
     const candidate = group.map(t => t.text).join('') + token;
-    const incomingWord = token.trim().split(/\s/, 1)[0].replace(/^[^a-z]+|[^a-z]+$/gi, '').toLowerCase();
-    if (group.length && CLAUSE_START_WORDS.has(incomingWord) && lexicalCount(group.map(t => t.text).join('')) >= 12) flush();
-    else if (group.length && tooLong(candidate.trim())) {
+    if (group.length && tooLong(candidate.trim())) {
       let splitAt = -1;
       for (let i = group.length - 1; i >= Math.floor(group.length * 0.55); i--) {
         const firstWord = String(group[i].text).trim().split(/\s/, 1)[0].replace(/^[^a-z]+|[^a-z]+$/gi, '').toLowerCase();
-        if (CLAUSE_START_WORDS.has(firstWord)) { splitAt = i; break; }
+        if (firstWord === 'to' && /\d/.test(String(group[i - 1]?.text || ''))) continue;
+        if (CLAUSE_START_WORDS.has(firstWord) && lexicalCount(group.slice(i).map(t => t.text).join('') + token) >= 4) { splitAt = i; break; }
       }
       if (splitAt > 0 && lexicalCount(group.slice(0, splitAt).map(t => t.text).join('')) >= 6) {
         groups.push(group.slice(0, splitAt));
@@ -93,6 +93,8 @@ function splitMeasuredWords<T extends TimedTranscriptSegment>(item: T, text: str
 
 function splitUntimedItem<T extends TimedTranscriptSegment>(item: T, text: string): T[] {
   const sentences = splitSentences(text).flatMap(splitAtReadableLimits);
+  const hasTiming = Number.isFinite(item.startTime) && Number.isFinite(item.endTime)
+    && item.startTime >= 0 && item.endTime > item.startTime;
   const duration = Math.max(0.08, Number(item.endTime) - Number(item.startTime));
   const totalWeight = Math.max(1, sentences.reduce((sum, sentence) => sum + sentence.length, 0));
   let consumedWeight = 0;
@@ -105,8 +107,8 @@ function splitUntimedItem<T extends TimedTranscriptSegment>(item: T, text: strin
       ...rest,
       id: `${item.id || 'segment'}_sentence_${index}`,
       originalText: sentence,
-      startTime: Number(item.startTime) + duration * startRatio,
-      endTime: Number(item.startTime) + duration * endRatio,
+      startTime: hasTiming ? Number(item.startTime) + duration * startRatio : -1,
+      endTime: hasTiming ? Number(item.startTime) + duration * endRatio : -1,
       __forceSubtitleBoundary: index > 0,
     } as T;
   });
@@ -129,6 +131,34 @@ function splitSentences(text: string): string[] {
   }
 
   return trimmed.match(/[^.!?。！？…]+(?:[.!?。！？…]+["'”’」』】）)]*|$)/g)?.map(part => part.trim()).filter(Boolean) || [trimmed];
+}
+
+export function needsReadableSegmentation(text: string): boolean {
+  return splitSentences(text).flatMap(splitAtReadableLimits).length > 1;
+}
+
+/** All input paths use these boundaries BEFORE translation. Never reuse a paragraph's
+ * translation or token analysis for each of its newly split sentences. */
+export function prepareReadableTranscript<T extends TimedTranscriptSegment>(items: T[]): T[] {
+  return items.flatMap(item => {
+    const timings = Array.isArray(item.wordTimings) ? [...item.wordTimings] : [];
+    // Shared links store acoustic times on analyzed words instead of wordTimings.
+    if (!timings.length && Array.isArray(item.words)) {
+      for (const word of item.words as any[]) {
+        if (Number.isFinite(word.startTime) && Number.isFinite(word.endTime) && word.endTime > word.startTime) {
+          timings.push({ text: `${timings.length ? ' ' : ''}${word.word}`, startTime: word.startTime, endTime: word.endTime });
+        } else if (/^[\s\p{P}]+$/u.test(word.word || '') && timings.length) {
+          (timings[timings.length - 1] as any).text += word.word;
+        }
+      }
+    }
+    const pieces = resegmentTimedTranscript([{ ...item, wordTimings: timings }]);
+    return pieces.map(piece => {
+      if (pieces.length === 1) return piece;
+      const { providedTranslation: _provided, translation: _translation, words: _words, ...clean } = piece;
+      return clean as T;
+    });
+  });
 }
 
 function joinFragments(left: string, right: string) {
