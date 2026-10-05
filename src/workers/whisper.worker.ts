@@ -15,6 +15,8 @@ function getTranscriber() {
       {
         dtype: 'q8',
         device: 'wasm',
+        // Avoid an ONNX Runtime QDQ weight optimization that rejects this model.
+        session_options: { graphOptimizationLevel: 'disabled' },
         progress_callback: (progress: any) => {
           self.postMessage({ type: 'progress', progress });
         },
