@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
 import { resegmentTimedTranscript, prepareReadableTranscript, needsReadableSegmentation } from '../utils/transcriptSegmentation';
-import { attachWordTimings, hasCompleteWordTimings } from '../utils/wordTiming';
+import { attachWordTimings, hasCompleteWordTimings, alignSuppliedTranscript } from '../utils/wordTiming';
 import { readTranscriptCache, writeTranscriptCache, transcriptMediaKey, type TranscriptMode } from '../utils/transcriptCache';
 import { resampleAudioRegion, mergeRegionLines, type AudioRegion } from '../utils/whisperRegion';
 
@@ -502,7 +502,9 @@ ${JSON.stringify(chunk)}
   };
 
   const decodeAudioTo16kMono = async (url: string, job: SubtitleJob, region?: AudioRegion) => {
-    const response = await fetch(url, { signal: job.controller.signal });
+    const source = /^https?:/i.test(url) ? `/api/media-proxy?url=${encodeURIComponent(url)}` : url;
+    let response = await fetch(source, { signal: job.controller.signal });
+    if (!response.ok && source !== url) response = await fetch(url, { signal: job.controller.signal });
     if (!response.ok) throw new Error(`無法讀取音檔（HTTP ${response.status}）`);
     const encoded = await response.arrayBuffer();
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -517,7 +519,7 @@ ${JSON.stringify(chunk)}
     }
   };
 
-  const transcribeLocalWithWhisper = async (job: SubtitleJob, region?: AudioRegion) => {
+  const transcribeLocalWithWhisper = async (job: SubtitleJob, region?: AudioRegion, referenceLines?: any[]) => {
     setIsProcessing(true);
     setStatusText(region ? `正在準備 A/B 片段（${(region.end - region.start).toFixed(1)} 秒）…` : "正在解碼本機音檔…");
     setShowCopyPasteGuide(false);
@@ -568,6 +570,21 @@ ${JSON.stringify(chunk)}
       checkJob(job);
 
       const chunks = Array.isArray(output?.chunks) ? output.chunks : [];
+      if (referenceLines) {
+        if (!output.wordTimestamped) throw new Error('Whisper 未能取得逐字時間戳，原字幕保留；請改用 AI 語音辨識取得整句字幕。');
+        const measured = chunks.map((chunk: any) => ({ text: String(chunk.text || ''),
+          startTime: Number(chunk.timestamp?.[0]), endTime: Number(chunk.timestamp?.[1]) }));
+        const aligned = alignSuppliedTranscript(prepareReadableTranscript(referenceLines), measured);
+        checkJob(job);
+        const completed = await processTextWithGemini('', aligned, job);
+        if (mediaKey && completed?.length && isCurrentJob(job)) {
+          await writeTranscriptCache({ media: mediaKey, language: 'und', requestedLanguage,
+            mode: 'generate', raw: aligned, lines: completed, placeholderCount: 0 });
+        }
+        if (isCurrentJob(job)) setStatusText('字幕已對上語音時間：有完整時間的句子逐字提示，其餘以整句提示。');
+        return;
+      }
+
       const mapped = resegmentTimedTranscript(normalizeTimedTranscript(chunks.map((chunk: any, index: number) => ({
         id: `whisper_${start}_${index}`,
         originalText: String(chunk.text || '').trim(),
@@ -709,9 +726,20 @@ ${JSON.stringify(chunk)}
     const coordinated = parsePastedCoordinates(inputText);
     if (coordinated.length > 0) {
       processTextWithGemini("", coordinated);
+    } else if (canReadAudio) {
+      void transcribeLocalWithWhisper(beginJob(), undefined, [{ id: `supplied_${Date.now()}`,
+        originalText: inputText, startTime: -1, endTime: -1 }]);
     } else {
       processTextWithGemini(inputText);
     }
+  };
+
+  const synchronizeSuppliedSubtitles = () => {
+    if (!canReadAudio || !lines.length) return;
+    const reference = lines.map(line => ({ ...line, startTime: line.startTime ?? -1,
+      endTime: line.endTime ?? -1, providedTranslation: line.translation,
+      wordTimings: undefined, words: undefined }));
+    void transcribeLocalWithWhisper(beginJob(), undefined, reference);
   };
 
   const [isPanelDragging, setIsPanelDragging] = useState(false);
@@ -1042,6 +1070,12 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                className="px-3 py-1.5 rounded-lg bg-[#7f5af0] text-white flex items-center gap-1.5 text-sm font-bold opacity-90 hover:opacity-100 disabled:opacity-50 transition-all">
                 <AudioLines className="w-4 h-4" />
                 AI 語音辨識
+            </button>
+            <button type="button" onClick={synchronizeSuppliedSubtitles}
+               disabled={isProcessing || !canReadAudio || !lines.length}
+               title="用免費 Whisper 取得實際語音時間，對齊已輸入的字幕；首次會下載模型"
+               className="px-3 py-1.5 rounded-lg border border-[#7f5af0]/50 text-[#a78bfa] text-sm font-bold disabled:opacity-40 hover:bg-[#7f5af0]/10">
+               同步音檔字幕
             </button>
             <button type="button" onClick={loadWhisperRegion}
                disabled={isProcessing || !validRegion || !canReadAudio}
