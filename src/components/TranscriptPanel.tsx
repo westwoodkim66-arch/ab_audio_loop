@@ -310,6 +310,7 @@ CRITICAL RULES:
 - Preserve every input "id", "originalText", "startTime", and "endTime" exactly. Only add translation and word analysis.
 - "originalText" MUST match the input snippet EXACTLY in its original language. DO NOT translate "originalText". If it's English, keep it English.
 - "translation" should be the Traditional Chinese (繁體中文) translation of the original text. If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value.
+- Keep each subtitle line concise and translate ONLY its matching line. Do not combine neighboring lines or turn several sentences into one Chinese paragraph.
 
 For each chunk:
 1. Tokenize the "originalText" into granular units:
