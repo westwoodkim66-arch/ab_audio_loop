@@ -6,11 +6,10 @@ import { attachWordTimings, hasCompleteWordTimings } from '../utils/wordTiming';
 import { readTranscriptCache, writeTranscriptCache, transcriptMediaKey, type TranscriptMode } from '../utils/transcriptCache';
 import { resampleAudioRegion, mergeRegionLines, type AudioRegion } from '../utils/whisperRegion';
 
-export interface POSWord {
+export interface SubtitleWord {
   word: string;
   furigana: string;
   romaji: string;
-  pos: string;
   startTime?: number;
   endTime?: number;
 }
@@ -21,7 +20,7 @@ export interface SubtitleLine {
   endTime: number | null;
   originalText: string;
   translation: string;
-  words: POSWord[];
+  words: SubtitleWord[];
 }
 
 export interface TranscriptPanelProps {
@@ -44,9 +43,9 @@ const PLACEHOLDER_CAPTION = /^[\s♪♫♬]*[\[\(（【]?\s*(?:音楽|音樂|音
 
 type SubtitleJob = { controller: AbortController; media: string };
 
-function plainSubtitleWords(text: string): POSWord[] {
+function plainSubtitleWords(text: string): SubtitleWord[] {
   return (text.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*|[^\s]/gu) || [])
-    .map(word => ({ word, furigana: '', romaji: '', pos: 'misc' }));
+    .map(word => ({ word, furigana: '', romaji: '' }));
 }
 
 function normalizeTimedTranscript(items: any[]) {
@@ -66,17 +65,7 @@ function normalizeTimedTranscript(items: any[]) {
   });
 }
 
-// POS Colors Configuration (Dark Mode Optimized Highlights)
-const POS_STYLES: Record<string, string> = {
-  noun: "bg-[#e2b714]/20 text-[#e2b714] border-b border-[#e2b714]/40 px-1.5 py-0.5 rounded-md",
-  verb: "bg-[#ef4444]/20 text-[#ef4444] border-b border-[#ef4444]/40 px-1.5 py-0.5 rounded-md",
-  particle: "bg-[#3b82f6]/20 text-[#3b82f6] border-b border-[#3b82f6]/40 px-1.5 py-0.5 rounded-md",
-  adjective: "bg-[#a855f7]/20 text-[#a855f7] border-b border-[#a855f7]/40 px-1.5 py-0.5 rounded-md",
-  pronoun: "bg-[#14b8a6]/20 text-[#14b8a6] border-b border-[#14b8a6]/40 px-1.5 py-0.5 rounded-md",
-  adverb: "bg-[#f97316]/20 text-[#f97316] border-b border-[#f97316]/40 px-1.5 py-0.5 rounded-md",
-  punctuation: "text-[#fffffe]/30 px-0 py-1",
-  misc: "bg-[#94a1b2]/10 text-[#94a1b2] border-b border-[#94a1b2]/30 px-1.5 py-0.5 rounded-md",
-};
+const WORD_STYLES = "bg-[#94a1b2]/10 text-[#94a1b2] border-b border-[#94a1b2]/30 px-1.5 py-0.5 rounded-md";
 
 export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange, subtitleOffset = 0, onSubtitleOffsetChange, onLoopLine, loopStart, loopEnd, loopEnabled, pointA, pointB }: TranscriptPanelProps) {
   const [lines, setLines] = useState<SubtitleLine[]>(initialLines);
@@ -312,7 +301,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
       const processedChunks: SubtitleLine[][] = new Array(chunks.length);
       let completedChunks = 0;
 
-      // 先顯示原始字幕；詳細翻譯、讀音和詞性在背景並行補上。
+      // 先顯示原始字幕；翻譯與讀音在背景並行補上。
       publish(placeholderChunks.flat());
       setStatusText(`字幕已載入，正在並行分析 ${chunks.length} 批內容...`);
 
@@ -324,7 +313,7 @@ Analyze each already-segmented subtitle line without changing its boundaries.
 CRITICAL RULES:
 - Output ONLY valid JSON array.
 - Return EXACTLY ONE output object for EACH input object, in the SAME ORDER. Never merge two inputs and never split one input.
-- Preserve every input "id", "originalText", "startTime", and "endTime" exactly. Only add translation and word analysis.
+- Preserve every input "id", "originalText", "startTime", and "endTime" exactly. Only add translation and pronunciation support.
 - "originalText" MUST match the input snippet EXACTLY in its original language. DO NOT translate "originalText". If it's English, keep it English.
 - "translation" should be the Traditional Chinese (繁體中文) translation of the original text. If the input object contains a "providedTranslation" that is NOT empty, USE IT EXACTLY as the "translation" value.
 - Keep each subtitle line concise and translate ONLY its matching line. Do not combine neighboring lines or turn several sentences into one Chinese paragraph.
@@ -337,7 +326,6 @@ For each chunk:
    - "word": The original token (e.g., "台湾", "私", "apple", "running", "."). This MUST NEVER be empty.
    - "furigana": For Japanese, the reading in Hiragana (output "" if already Kana). For English, output "".
    - "romaji": For Japanese, the rōmaji reading. For English, output "".
-   - "pos": Assign one of these exact strings: noun, verb, particle, adjective, pronoun, adverb, punctuation, misc.
 
 Respond strictly as a JSON array of line objects.
 Each line object should have:
@@ -375,7 +363,6 @@ ${JSON.stringify(chunk)}
                         word: { type: Type.STRING },
                         furigana: { type: Type.STRING },
                         romaji: { type: Type.STRING },
-                        pos: { type: Type.STRING }
                       }
                     }
                   }
@@ -399,7 +386,7 @@ ${JSON.stringify(chunk)}
           const validWords = Array.isArray(analyzed.words) && analyzed.words.length > 0
             && !analyzed.words.some((word: any) => /[A-Za-z]/.test(word.word || '') && /\s/.test(String(word.word || '').trim()))
             && normalized(analyzed.words.map((word: any) => word.word || '').join('')) === normalized(source.originalText || '');
-          const words = validWords ? analyzed.words : plainSubtitleWords(source.originalText || '');
+          const words = validWords ? analyzed.words.map(({ pos: _pos, ...word }: any) => word) : plainSubtitleWords(source.originalText || '');
           return {
             ...analyzed,
             id: `${source.id || `line_${Date.now()}`}_${i}_${pIdx}`,
@@ -1154,14 +1141,6 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
       {lines.length > 0 && (
         <div ref={scrollContainerRef} className="transcript-scroll p-3 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all max-h-[60dvh] overflow-y-auto styled-scrollbar">
             <div className="secondary-tool flex border-b border-white/5 pb-4 mb-4 gap-4 items-center">
-              <span className="text-sm font-bold text-[#94a1b2]">詞性標記：</span>
-              <div className="flex flex-wrap gap-2 text-[10px] items-center">
-                 <span className="px-2 py-0.5 rounded-md bg-[#e2b714]/20 text-[#e2b714] border border-[#e2b714]/30">名詞</span>
-                 <span className="px-2 py-0.5 rounded-md bg-[#ef4444]/20 text-[#ef4444] border border-[#ef4444]/30">動詞</span>
-                 <span className="px-2 py-0.5 rounded-md bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/30">助詞</span>
-                 <span className="px-2 py-0.5 rounded-md bg-[#a855f7]/20 text-[#a855f7] border border-[#a855f7]/30">形容詞</span>
-                 <span className="px-2 py-0.5 rounded-md bg-[#14b8a6]/20 text-[#14b8a6] border border-[#14b8a6]/30">代名詞</span>
-              </div>
               <div className="ml-auto flex items-center gap-3">
                  <select 
                     disabled={isProcessing}
@@ -1195,14 +1174,8 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                    const isLoopSelected = canLoop && loopEnabled && loopStart !== null && loopStart !== undefined
                      && loopEnd !== null && loopEnd !== undefined
                      && Math.abs(loopStart - line.startTime!) < 0.02 && Math.abs(loopEnd - line.endTime!) < 0.02;
-                   // Reserve annotation rows consistently across the sentence.
-                   // A label on only some words must not move the main text.
                    const hasFurigana = line.words.some(word => !!word.furigana);
-                   const hasWordLabels = line.words.some(word =>
-                       (word.romaji && word.romaji !== word.word) ||
-                       (/^[A-Za-z0-9'\-.,!?;]+$/.test((word.word || word.romaji || '').trim()) &&
-                        ['noun', 'verb', 'adjective'].includes(word.pos))
-                   );
+                   const hasRomaji = line.words.some(word => word.romaji && word.romaji !== word.word);
                    
                    return (
                        <div 
@@ -1233,23 +1206,15 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                                     const displayWord = word.word || word.romaji || " ";
                                     const displayRomaji = (word.romaji && word.romaji !== word.word) ? word.romaji : "";
                                     
-                                    let posLabel = "";
-                                    const isEnglish = /^[A-Za-z0-9'\-.,!?;]+$/.test(displayWord.trim());
-                                    if (isEnglish) {
-                                        if (word.pos === "noun") posLabel = "n.";
-                                        else if (word.pos === "verb") posLabel = "v.";
-                                        else if (word.pos === "adjective") posLabel = "adj.";
-                                    }
-                                    
-                                    const bottomLabel = displayRomaji || posLabel;
+                                    const bottomLabel = displayRomaji;
 
                                     return (
-                                        <div key={idx} className="grid justify-items-center items-center mx-[1px] leading-none shrink-0 group" style={{ gridTemplateRows: `${hasFurigana ? '12px ' : ''}${subtitleFontSize + 11}px${hasWordLabels ? ' 12px' : ''}` }}>
+                                        <div key={idx} className="grid justify-items-center items-center mx-[1px] leading-none shrink-0 group" style={{ gridTemplateRows: `${hasFurigana ? '12px ' : ''}${subtitleFontSize + 11}px${hasRomaji ? ' 12px' : ''}` }}>
                                             {hasFurigana && <span aria-hidden={!word.furigana} className={`text-[9px] font-medium whitespace-nowrap transition-colors ${isWordActive ? "text-[#fffffe]" : "text-[#94a1b2] opacity-90"}`}>{word.furigana || '\u00a0'}</span>}
                                             <span
                                                 data-reading-state={isWordActive ? 'current' : hasBeenRead ? 'read' : 'upcoming'}
                                                 aria-current={isWordActive ? 'true' : undefined}
-                                                className={`text-[17px] leading-snug font-semibold ${POS_STYLES[word.pos] || POS_STYLES['misc']} transition-colors duration-100 shadow-sm h-7 box-border flex items-center justify-center ${isWordActive ? "ring-2 ring-[#a78bfa] z-10" : ""}`}
+                                                className={`text-[17px] leading-snug font-semibold ${WORD_STYLES} transition-colors duration-100 shadow-sm h-7 box-border flex items-center justify-center ${isWordActive ? "ring-2 ring-[#a78bfa] z-10" : ""}`}
                                                 style={{ fontSize: subtitleFontSize, height: subtitleFontSize + 11, ...(isWordActive
                                                     ? { color: '#ffffff', backgroundColor: '#7f5af0', borderRadius: '6px', boxShadow: '0 0 10px rgba(127,90,240,0.35)' }
                                                     : hasBeenRead
@@ -1258,7 +1223,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                                             >
                                                 {displayWord}
                                             </span>
-                                            {hasWordLabels && <span aria-hidden={!bottomLabel} className={`text-[9px] whitespace-nowrap font-mono italic transition-opacity ${isWordActive ? "text-[#fffffe] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel || '\u00a0'}</span>}
+                                            {hasRomaji && <span aria-hidden={!bottomLabel} className={`text-[9px] whitespace-nowrap font-mono italic transition-opacity ${isWordActive ? "text-[#fffffe] opacity-100" : "text-[#94a1b2] opacity-80 group-hover:opacity-100"}`}>{bottomLabel || '\u00a0'}</span>}
                                         </div>
                                     );
                                 })}
