@@ -2381,7 +2381,8 @@ export default function App() {
                       />
                     ) : (
                     <Player
-                      key={audioUrl}
+                      // Remount when falling back from the same-origin BOOST proxy to the source URL.
+                      key={`${audioUrl}|${playbackUrl}`}
                       ref={(player: any) => {
                         if (player) {
                           playerRef.current = player;
@@ -2424,16 +2425,26 @@ export default function App() {
                         setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
                         setTimeout(() => setSuccessMessage(''), 3000);
                       }}
-                      onError={() => {
+                      onError={(playerError: any) => {
                         if (!audioUrl) return;
                         if (playbackUrl !== audioUrl) {
-                          // If the protected proxy rejects an unsupported/oversized source, immediately
-                          // fall back to native playback and disable BOOST for this URL.
+                          // A rejected proxy must not strand playback. Changing the key above remounts
+                          // ReactPlayer with the original URL, which is especially important on mobile.
                           setVolumeBoostBlockedUrl(audioUrl);
+                          setIsVolumeBoostEnabled(false);
+                          const boostContext = audioContextRef.current;
+                          const boostGain = volumeBoostGainRef.current;
+                          if (boostContext && boostGain && boostContext.state !== 'closed') {
+                            boostGain.gain.setValueAtTime(1, boostContext.currentTime);
+                          }
+                          try { volumeBoostSourceRef.current?.disconnect(); } catch {}
+                          volumeBoostSourceRef.current = null;
+                          volumeBoostElementRef.current = null;
                           setError('此音檔無法使用 BOOST，已自動恢復原始播放網址。');
                           return;
                         }
-                        setError('載入失敗，可能原因：連結無效、該網站禁止嵌入、或 CORS 權限限制。');
+                        const detail = playerError?.message || playerError?.type || '';
+                        setError(`音檔來源無法播放${detail ? `（${String(detail).slice(0, 120)}）` : '。'}請確認網址可公開存取；也可下載音檔後按「上傳音檔」。`);
                         setSuccessMessage('');
                       }}
                       width="100%"
