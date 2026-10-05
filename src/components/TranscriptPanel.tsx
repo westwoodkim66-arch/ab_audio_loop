@@ -69,6 +69,7 @@ const WORD_STYLES = "bg-[#94a1b2]/10 text-[#94a1b2] border-b border-[#94a1b2]/30
 
 export default function TranscriptPanel({ playerRef, audioUrl, currentTime, initialLines = [], onLinesChange, subtitleOffset = 0, onSubtitleOffsetChange, onLoopLine, loopStart, loopEnd, loopEnabled, pointA, pointB }: TranscriptPanelProps) {
   const [lines, setLines] = useState<SubtitleLine[]>(initialLines);
+  const publishedLinesRef = useRef(new WeakSet<SubtitleLine[]>());
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [inputText, setInputText] = useState("");
@@ -216,6 +217,8 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
 
   // Sync with initialLines if it changes
   useEffect(() => {
+    // Parent echoes must not feed old child results back into the panel.
+    if (initialLines === lines || publishedLinesRef.current.has(initialLines)) return;
     if (initialLines.length > 0) {
       if (initialLines.some(line => needsReadableSegmentation(line.originalText))) {
         void processTextWithGemini('', initialLines);
@@ -225,7 +228,8 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
 
   // Notify parent when lines change
   useEffect(() => {
-    if (onLinesChange) {
+    publishedLinesRef.current.add(lines);
+    if (onLinesChange && initialLines !== lines) {
       onLinesChange(lines);
     }
   }, [lines, onLinesChange]);
