@@ -480,6 +480,69 @@ export default function App() {
   const activeLine = activeLineIndex !== -1 ? transcriptLines[activeLineIndex] : null;
 
   const playerRef = useRef<any>(null);
+  // One playback owner per origin, including tabs opened from share links.
+  const playbackOwnerRef = useRef(crypto.randomUUID());
+  const playbackChannelRef = useRef<BroadcastChannel | null>(null);
+  const ownedMediaRef = useRef<HTMLMediaElement | null>(null);
+  const stopNativeMedia = (media: HTMLMediaElement | null) => {
+    if (!media) return;
+    media.pause();
+    media.removeAttribute('src');
+    media.load(); // Explicitly unload detached audio on Safari/iOS too.
+  };
+  const attachPlayer = useCallback((player: any) => {
+    if (!player) {
+      stopNativeMedia(ownedMediaRef.current);
+      ownedMediaRef.current = null;
+    }
+    playerRef.current = player;
+  }, []);
+  const claimPlayback = (active?: HTMLMediaElement) => {
+    for (const preview of [clipAudioRef.current, shadowAudioPlayerRef.current]) {
+      if (preview && preview !== active) preview.pause();
+    }
+    if (active !== clipAudioRef.current) setPlayingClipId(null);
+    if (active !== shadowAudioPlayerRef.current) setPlayingShadowId(null);
+    if (active && (active === clipAudioRef.current || active === shadowAudioPlayerRef.current)) {
+      const main = playerRef.current?.getInternalPlayer?.();
+      if (main instanceof HTMLMediaElement) main.pause();
+      setIsPlaying(false);
+    }
+    const message = { owner: playbackOwnerRef.current, nonce: crypto.randomUUID() };
+    playbackChannelRef.current?.postMessage(message);
+    try { localStorage.setItem('ab_repeat_playback_owner', JSON.stringify(message)); } catch {}
+  };
+  useEffect(() => {
+    const pauseForOtherTab = (message: { owner?: string } | null) => {
+      if (!message?.owner || message.owner === playbackOwnerRef.current) return;
+      const main = playerRef.current?.getInternalPlayer?.();
+      if (main instanceof HTMLMediaElement) main.pause();
+      clipAudioRef.current?.pause();
+      shadowAudioPlayerRef.current?.pause();
+      setPlayingClipId(null);
+      setPlayingShadowId(null);
+      setIsPlaying(false);
+    };
+    const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('ab_repeat_playback') : null;
+    playbackChannelRef.current = channel;
+    if (channel) channel.onmessage = event => pauseForOtherTab(event.data);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== 'ab_repeat_playback_owner' || !event.newValue) return;
+      try { pauseForOtherTab(JSON.parse(event.newValue)); } catch {}
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      channel?.close();
+      playbackChannelRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    clipAudioRef.current?.pause();
+    shadowAudioPlayerRef.current?.pause();
+    setPlayingClipId(null);
+    setPlayingShadowId(null);
+  }, [audioUrl]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const volumeBoostSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const volumeBoostGainRef = useRef<GainNode | null>(null);
@@ -524,6 +587,9 @@ export default function App() {
       return audioUrl;
     }
   }, [audioUrl, isVolumeBoostAvailable]);
+
+  const activePlaybackUrlRef = useRef(playbackUrl);
+  activePlaybackUrlRef.current = playbackUrl;
 
   useEffect(() => {
     // 換檔時先恢復正常增益，避免使用者誤以為新來源也已完成增益處理。
@@ -977,6 +1043,7 @@ export default function App() {
   }, [currentTime, duration, pointA, pointB, isRepeatEnabled]);
   const jumpToAndPlay = (targetTime: number | null) => {
     if (targetTime !== null && playerRef.current) {
+      claimPlayback();
       playerRef.current.seekTo(targetTime, 'seconds');
       setIsPlaying(true);
     }
@@ -1406,6 +1473,7 @@ export default function App() {
       setTimeout(() => setError(''), 3000);
     };
 
+    audio.onplay = () => claimPlayback(audio);
     audio.play().catch(e => {
       console.error(e);
       setPlayingShadowId(null);
@@ -1568,6 +1636,7 @@ export default function App() {
     };
 
     setPlayingClipId(bookmarkId);
+    audio.onplay = () => claimPlayback(audio);
     audio.play().catch(e => {
       console.error("Clip play initial failed", e);
       setPlayingClipId(null);
@@ -1761,6 +1830,7 @@ export default function App() {
     const boostContext = audioContextRef.current;
     if (boostContext?.state === 'suspended') void boostContext.resume();
     if (!isPlaying) {
+      claimPlayback();
       // 解決部分內嵌瀏覽器 (如 Line) 除非手動改變音量否則沒有聲音的問題
       setTimeout(() => setVolume(v => v >= 1 ? 0.99 : v + 0.01), 50);
       // 同步觸發底層播放器，避免 React 狀態更新延遲導致 iOS/Line 判定非使用者主動操作
@@ -2402,11 +2472,7 @@ export default function App() {
                     <Player
                       // Remount when falling back from the same-origin BOOST proxy to the source URL.
                       key={`${audioUrl}|${playbackUrl}`}
-                      ref={(player: any) => {
-                        if (player) {
-                          playerRef.current = player;
-                        }
-                      }}
+                      ref={attachPlayer}
                       style={{ position: 'absolute', top: 0, left: 0 }}
                       url={playbackUrl}
                       playing={isPlaying}
@@ -2414,11 +2480,18 @@ export default function App() {
                       playbackRate={playbackRate}
                       loop={isRepeatEnabled && pointA === null && pointB === null}
                       onPlay={() => {
+                        if (activePlaybackUrlRef.current !== playbackUrl) return;
+                        const media = playerRef.current?.getInternalPlayer?.();
+                        if (media instanceof HTMLMediaElement) ownedMediaRef.current = media;
+                        claimPlayback();
                         const boostContext = audioContextRef.current;
                         if (boostContext?.state === 'suspended') void boostContext.resume();
                         setIsPlaying(true);
                       }}
-                      onPause={() => { setIsPlaying(false); savePlayback(); }}
+                      onPause={() => {
+                        if (activePlaybackUrlRef.current !== playbackUrl) return;
+                        setIsPlaying(false); savePlayback();
+                      }}
                       onEnded={() => {
                         if (isRepeatEnabled) {
                           if (pointA !== null) {
@@ -2437,6 +2510,9 @@ export default function App() {
                       }}
                       onDuration={(dur: number) => setDuration(dur)}
                       onReady={() => {
+                        if (activePlaybackUrlRef.current !== playbackUrl) return;
+                        const media = playerRef.current?.getInternalPlayer?.();
+                        if (media instanceof HTMLMediaElement) ownedMediaRef.current = media;
                         if (activeMediaUrlRef.current !== audioUrl) return;
                         if (lastLoadedUrl.current === audioUrl) return;
                         lastLoadedUrl.current = audioUrl;
@@ -2446,7 +2522,16 @@ export default function App() {
                         setTimeout(() => setSuccessMessage(''), 3000);
                       }}
                       onError={(playerError: any) => {
-                        if (!audioUrl || activeMediaUrlRef.current !== audioUrl) return;
+                        if (!audioUrl || activeMediaUrlRef.current !== audioUrl || activePlaybackUrlRef.current !== playbackUrl) return;
+                        // A playback permission rejection is not a broken media source. Do not remount
+                        // and retry a second URL; wait for a real user gesture instead.
+                        if (playerError?.name === 'NotAllowedError') {
+                          setIsPlaying(false);
+                          setError('瀏覽器未允許自動播放，請按播放鍵開始。');
+                          setSuccessMessage('');
+                          return;
+                        }
+                        if (playerError?.name === 'AbortError') return;
                         if (playbackUrl !== audioUrl) {
                           // A rejected proxy must not strand playback. Changing the key above remounts
                           // ReactPlayer with the original URL, which is especially important on mobile.
