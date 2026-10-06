@@ -1,9 +1,12 @@
+Warning: truncated output (original token count: 49743)
+Total output lines: 4106
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
 import { Keyboard, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward, Settings2, Trash2, Volume2, Link as LinkIcon, Info, Upload, FileAudio, FileText, Share2, Minus, Plus, Bookmark as BookmarkIcon, Tag, Search, Video, Sparkles, Scissors, Download, Edit, X, Check, GripVertical, Mic, Zap } from 'lucide-react';
 import ReactPlayer from 'react-player';
 import LZString from 'lz-string';
@@ -243,6 +246,10 @@ export default function App() {
   }, []);
 
   const [audioUrl, setAudioUrl] = useState(initialData.url);
+  const [urlInput, setUrlInput] = useState(initialData.url);
+  const activeMediaUrlRef = useRef(audioUrl);
+  activeMediaUrlRef.current = audioUrl;
+  useEffect(() => { setUrlInput(audioUrl); }, [audioUrl]);
   const [isPlaying, setIsPlaying] = useState(initialData.autoPlay);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -393,7 +400,8 @@ export default function App() {
   const mediaMemoryKey = playbackMediaKey(audioUrl, uploadedFile);
   const { subtitleOffset, setSubtitleOffset, initialTime: resumeTime, restorePosition,
     rememberProgress, flush: savePlayback } = usePlaybackMemory(mediaMemoryKey, initialData.sharedStart);
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // Reset before a cached media element can fire its ready event.
     lastLoadedUrl.current = '';
     setCurrentTime(0);
     setDuration(0);
@@ -2023,6 +2031,25 @@ export default function App() {
     setCurrentTime(target);
   };
 
+  const loadEnteredUrl = () => {
+    const entered = urlInput.trim();
+    try {
+      const parsed = new URL(entered);
+      if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error();
+    } catch {
+      setError('請輸入完整的 http 或 https 音檔／影片網址。');
+      return;
+    }
+    setUrlInput(entered);
+    setError('');
+    // Loading the same source is idempotent: keep its player, position and captions.
+    if (entered === audioUrl) return;
+    setFileName('');
+    setUploadedFile(null);
+    setSuccessMessage('準備載入中...');
+    setAudioUrl(entered);
+  };
+
   const handleShare = async () => {
     if (!audioUrl) {
       alert("❌ 目前沒有可分享的音檔。");
@@ -2175,520 +2202,7 @@ export default function App() {
       console.warn('Clipboard API failed', e);
     }
     
-    if (!copySuccess) {
-      try {
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
-        textArea.style.top = "0";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        textArea.setSelectionRange(0, 99999);
-        copySuccess = document.execCommand('copy');
-        document.body.removeChild(textArea);
-      } catch (err) {
-        console.warn('Legacy copy failed');
-      }
-    }
-    
-    if (copySuccess) {
-      alert("✅ 已成功複製到剪貼簿！");
-    } else {
-      alert("❌ 複製失敗，請手動長按選取網址。");
-    }
-  };
-
-  const filteredBookmarks = bookmarks.filter(b => {
-    const matchesQuery = b.label.toLowerCase().includes(bookmarkSearchQuery.toLowerCase()) ||
-      formatTime(b.time).includes(bookmarkSearchQuery);
-    
-    if (bookmarkColorFilter === 'all') return matchesQuery;
-    const bColor = b.color || 'gray';
-    return matchesQuery && bColor === bookmarkColorFilter;
-  });
-
-  const sortedAndFilteredBookmarks = useMemo(() => {
-    const list = [...filteredBookmarks];
-    if (bookmarkSortBy === 'time-asc') {
-      return list.sort((a, b) => a.time - b.time);
-    } else if (bookmarkSortBy === 'time-desc') {
-      return list.sort((a, b) => b.time - a.time);
-    } else if (bookmarkSortBy === 'category') {
-      const colorPriority: Record<string, number> = {
-        'red': 1,    // 待加強
-        'blue': 2,   // 生字區
-        'green': 3,  // 已掌握
-        'gray': 4    // 預設
-      };
-      return list.sort((a, b) => {
-        const priorityA = colorPriority[a.color || 'gray'] || 99;
-        const priorityB = colorPriority[b.color || 'gray'] || 99;
-        if (priorityA !== priorityB) {
-          return priorityA - priorityB;
-        }
-        return a.time - b.time;
-      });
-    }
-    return list;
-  }, [filteredBookmarks, bookmarkSortBy]);
-
-  return (
-    <div className={`min-h-screen flex flex-col items-center py-12 px-4 font-sans relative ${focusMode ? 'focus-mode' : ''} ${focusToolsOpen ? 'focus-tools-open' : ''}`} style={{ backgroundColor: colors.background, color: colors.paragraph }}>
-      
-      {successMessage && (
-        <div className="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-4 border shadow-2xl font-bold z-50 transition-all flex items-center gap-3 animate-in fade-in slide-in-from-top-4" style={{ backgroundColor: colors.tertiary, color: colors.background, borderColor: colors.stroke }}>
-          <FileAudio className="w-5 h-5" />
-          {successMessage}
-        </div>
-      )}
-
-      {/* Keyboard Shortcut Hints Bar */}
-      <div className="secondary-tool max-w-4xl w-full mb-6 p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs font-medium" style={{ borderColor: colors.stroke, backgroundColor: 'rgba(255, 255, 255, 0.01)' }}>
-        <div className="flex items-center gap-2" style={{ color: colors.headline }}>
-          <Keyboard className="w-4 h-4 text-[#7f5af0]" />
-          <span>鍵盤快捷鍵指南</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold" style={{ backgroundColor: '#242629', borderColor: colors.stroke, color: colors.headline }}>Space</kbd>
-            <span className="text-[11px]">{isPlaying ? '暫停' : '播放'}</span>
-          </div>
-          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold" style={{ backgroundColor: '#242629', borderColor: colors.stroke, color: colors.headline }}>A</kbd>
-            <span className="text-[11px]">設 A 點</span>
-          </div>
-          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold" style={{ backgroundColor: '#242629', borderColor: colors.stroke, color: colors.headline }}>B</kbd>
-            <span className="text-[11px]">設 B 點</span>
-          </div>
-          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">←</kbd>
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">→</kbd>
-            <span className="text-[11px]">微調 5 秒</span>
-          </div>
-          <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">Shift</kbd>
-            <span className="text-[11px] opacity-40">+</span>
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">←</kbd>
-            <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono border font-bold">→</kbd>
-            <span className="text-[11px]">微調 1 秒</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="app-card max-w-4xl w-full shadow-2xl border rounded-2xl md:rounded-3xl relative" style={{ borderColor: colors.stroke, backgroundColor: colors.background }}>
-        <div className="reading-mode-toolbar flex flex-wrap items-center gap-2 px-4 md:px-8 py-3 rounded-t-2xl bg-[#16161a]">
-          <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm hover:bg-white/5" style={{ borderColor: colors.stroke, color: colors.headline }}>
-            <Upload className="w-4 h-4" />上傳音檔
-          </button>
-          <button type="button" aria-pressed={focusMode} onClick={() => { setFocusMode(!focusMode); setFocusToolsOpen(false); }} className="px-3 py-2 rounded-lg bg-[#7f5af0] text-white text-sm font-bold">
-            {focusMode ? '退出專注模式' : '專注模式'}
-          </button>
-          {focusMode && <button type="button" aria-expanded={focusToolsOpen} onClick={() => setFocusToolsOpen(!focusToolsOpen)} className="px-3 py-2 text-sm text-white border border-white/20 rounded-lg">
-            {focusToolsOpen ? '收合其他工具' : '展開其他工具'}
-          </button>}
-          <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.m4a,.aac" onChange={(e) => { if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]); }} />
-        </div>
-        
-        <div className="secondary-tool px-8 md:px-12 pt-8 md:pt-12">
-          <div className="mb-8 flex flex-col gap-4">
-                {fileName && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 border" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
-                    <FileAudio className="w-4 h-4" style={{ color: colors.button }} />
-                    <span className="text-sm font-mono truncate max-w-[200px] md:max-w-[300px]" style={{ color: colors.headline }}>{fileName}</span>
-                  </div>
-                )}
-
-            <div className="flex items-center gap-4 my-2">
-              <div className="flex-grow h-px" style={{ backgroundColor: colors.stroke }}></div>
-              <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: colors.secondary }}>或貼上網址</span>
-              <div className="flex-grow h-px" style={{ backgroundColor: colors.stroke }}></div>
-            </div>
-
-            <div className="flex gap-3">
-              <div className="relative flex-grow border" style={{ borderColor: colors.stroke }}>
-                <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 opacity-40" />
-                <input 
-                  type="text" 
-                  placeholder="輸入音檔、YouTube 等連結..." 
-                  className="w-full pl-12 pr-4 py-4 outline-none focus:ring-2 transition-all border-none" 
-                  style={{ backgroundColor: 'transparent', color: colors.headline }} 
-                  value={audioUrl} 
-                  onChange={(e) => { 
-                    setAudioUrl(e.target.value); 
-                    setFileName(''); 
-                    setUploadedFile(null);
-                    setError(''); // 清除錯誤
-                  }} 
-                />
-              </div>
-              <button 
-                onClick={() => { 
-                  setError('');
-                  if(playerRef.current) {
-                    setSuccessMessage('準備載入中...');
-                    setTimeout(() => setSuccessMessage(''), 2000);
-                  }
-                }} 
-                className="px-8 py-4 font-black transition-all hover:opacity-90 active:scale-95 whitespace-nowrap uppercase tracking-widest text-xs border" 
-                style={{ backgroundColor: 'transparent', color: colors.headline, borderColor: colors.headline }}
-              >
-                載入連結
-              </button>
-            </div>
-            {error && <div className="mt-1 text-red-400 text-sm flex items-center gap-2 px-2"><Info className="w-4 h-4 flex-shrink-0" /> {error}</div>}
-
-          </div>
-        </div>
-
-        <div id="sticky-header" className="sticky top-0 z-40 border-b-2 shadow-2xl transition-all" style={{ backgroundColor: colors.background, borderColor: colors.stroke }}>
-          <div className="px-4 md:px-8 py-3">
-            {/* The video container, if visible, maybe make it very small or hidden when scrolling? We'll just shrink its margins. */}
-            <div className={`mb-3 overflow-hidden transition-all duration-500 border rounded-lg mx-auto bg-black ${isVideo ? 'shadow-md opacity-100 w-full max-w-[500px] aspect-video' : 'h-1 opacity-0 pointer-events-none mb-0 border-none m-0'}`} style={{ borderColor: colors.stroke }}>
-              <div className="relative w-full h-full flex justify-center items-center">
-                    {isDailymotion && dmVideoId ? (
-                      <DailymotionPlayer
-                        videoId={dmVideoId}
-                        playerId={dailymotionPlayerId}
-                        initialTime={resumeTime}
-                        playing={isPlaying}
-                        volume={activeVolume}
-                        playbackRate={playbackRate}
-                        onProgress={(state) => {
-                          if (!rememberProgress(state.playedSeconds)) return;
-                          setCurrentTime(state.playedSeconds);
-                        }}
-                        onDuration={(dur) => setDuration(dur)}
-                        onEnded={() => {
-                          if (isRepeatEnabled) {
-                            if (pointA !== null) jumpToAndPlay(pointA);
-                            else jumpToAndPlay(0);
-                          } else {
-                            setIsPlaying(false);
-                          }
-                        }}
-                        onReady={() => {
-                          if (lastLoadedUrl.current === audioUrl) return;
-                          lastLoadedUrl.current = audioUrl;
-                          restoreMediaPosition();
-                          setError('');
-                          setSuccessMessage('影片載入成功！');
-                          setTimeout(() => setSuccessMessage(''), 3000);
-                        }}
-                        playerRef={playerRef}
-                      />
-                    ) : (
-                    <Player
-                      // Remount when falling back from the same-origin BOOST proxy to the source URL.
-                      key={`${audioUrl}|${playbackUrl}`}
-                      ref={(player: any) => {
-                        if (player) {
-                          playerRef.current = player;
-                        }
-                      }}
-                      style={{ position: 'absolute', top: 0, left: 0 }}
-                      url={playbackUrl}
-                      playing={isPlaying}
-                      volume={activeVolume}
-                      playbackRate={playbackRate}
-                      loop={isRepeatEnabled && pointA === null && pointB === null}
-                      onPlay={() => {
-                        const boostContext = audioContextRef.current;
-                        if (boostContext?.state === 'suspended') void boostContext.resume();
-                        setIsPlaying(true);
-                      }}
-                      onPause={() => { setIsPlaying(false); savePlayback(); }}
-                      onEnded={() => {
-                        if (isRepeatEnabled) {
-                          if (pointA !== null) {
-                            jumpToAndPlay(pointA);
-                          } else {
-                            jumpToAndPlay(0);
-                          }
-                        } else {
-                          setIsPlaying(false);
-                        }
-                      }}
-                      progressInterval={100}
-                      onProgress={(state: any) => {
-                        if (!rememberProgress(state.playedSeconds)) return;
-                        setCurrentTime(state.playedSeconds);
-                      }}
-                      onDuration={(dur: number) => setDuration(dur)}
-                      onReady={() => {
-                        if (lastLoadedUrl.current === audioUrl) return;
-                        lastLoadedUrl.current = audioUrl;
-                        restoreMediaPosition();
-                        setError('');
-                        setSuccessMessage(isVideo ? '影片載入成功！' : '音檔載入成功！');
-                        setTimeout(() => setSuccessMessage(''), 3000);
-                      }}
-                      onError={(playerError: any) => {
-                        if (!audioUrl) return;
-                        if (playbackUrl !== audioUrl) {
-                          // A rejected proxy must not strand playback. Changing the key above remounts
-                          // ReactPlayer with the original URL, which is especially important on mobile.
-                          setVolumeBoostBlockedUrl(audioUrl);
-                          setIsVolumeBoostEnabled(false);
-                          const boostContext = audioContextRef.current;
-                          const boostGain = volumeBoostGainRef.current;
-                          if (boostContext && boostGain && boostContext.state !== 'closed') {
-                            boostGain.gain.setValueAtTime(1, boostContext.currentTime);
-                          }
-                          try { volumeBoostSourceRef.current?.disconnect(); } catch {}
-                          volumeBoostSourceRef.current = null;
-                          volumeBoostElementRef.current = null;
-                          setError('此音檔無法使用 BOOST，已自動恢復原始播放網址。');
-                          return;
-                        }
-                        const detail = playerError?.message || playerError?.type || '';
-                        setError(`音檔來源無法播放${detail ? `（${String(detail).slice(0, 120)}）` : '。'}請確認網址可公開存取；也可下載音檔後按「上傳音檔」。`);
-                        setSuccessMessage('');
-                      }}
-                      width="100%"
-                      height="100%"
-                      playsinline={true}
-                      config={{
-                        file: { attributes: { playsInline: true, webkitplaysinline: "true" } },
-                        youtube: { playerVars: { origin: window.location.origin, autoplay: 1, playsinline: 1 } },
-                        vimeo: { playerOptions: { playsinline: true, autoplay: true } }
-                      } as any}
-                    />
-                    )}
-
-                 {/* Subtitle Overlay for Video Player */}
-                 {isVideo && activeLine && (
-                   <div className="absolute bottom-2 md:bottom-4 left-0 w-full px-4 flex flex-col items-center justify-end pointer-events-none z-10 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-                     <div className="flex flex-wrap items-center justify-center gap-x-1 md:gap-x-1.5 bg-black/60 px-3 py-1 md:px-4 md:py-1.5 rounded-lg backdrop-blur-sm max-w-[95%]">
-                       {activeLine.words.map((word, i) => {
-                         const isWordActive = i === activeWordIndex;
-                         const wordText = word.word || word.romaji || "";
-                         return (
-                           <span 
-                             key={i} 
-                             className={`text-xs sm:text-sm md:text-base font-bold transition-all duration-300 ease-out transform ${isWordActive ? 'text-[#7f5af0] -translate-y-0.5 scale-110 drop-shadow-[0_0_8px_rgba(127,90,240,0.8)]' : 'text-white/90'}`}
-                           >
-                             {wordText}
-                           </span>
-                         )
-                       })}
-                     </div>
-                     {activeLine.translation && (
-                       <div className="mt-1 md:mt-1.5 flex justify-center transition-all duration-300">
-                         <span className="text-[10px] md:text-xs font-medium text-white bg-black/70 px-2 md:px-3 py-0.5 md:py-1 rounded shadow-sm text-center line-clamp-1 max-w-[95%]">
-                           {activeLine.translation}
-                         </span>
-                       </div>
-                     )}
-                   </div>
-                 )}
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-3">
-              {/* Top Row: Time, Progress Bar, Play Controls */}
-              <div className="flex flex-col gap-3">
-                <div className="flex-grow flex flex-col gap-1.5 justify-center">
-                  <div className="flex justify-between items-center px-1">
-                    <span className="font-mono text-sm font-bold tracking-tight" style={{ color: colors.headline }}>{formatTime(currentTime)} <span className="opacity-40 font-normal">/ {formatTime(duration)}</span></span>
-                  </div>
-
-                  <div className="relative h-6 flex items-center group/bar">
-                    <div 
-                      ref={progressBarRef} 
-                      onMouseDown={onProgressMouseDown}
-                      onTouchStart={onProgressMouseDown}
-                      onMouseMove={onProgressMouseMove}
-                      onTouchMove={onProgressMouseMove}
-                      onMouseEnter={() => setIsHoveringBar(true)}
-                      onMouseLeave={() => { if (!isScrubbing) { setIsHoveringBar(false); setPreviewTime(null); } }}
-                      className={`relative w-full h-3 cursor-pointer overflow-hidden shadow-inner rounded-full transition-all duration-150 group-hover/bar:h-4 ${
-                        isScrubbing 
-                          ? 'h-4 brightness-125 scale-y-[1.1] shadow-md' 
-                          : 'active:brightness-115 active:scale-y-[1.05]'
-                      }`}
-                      style={{ backgroundColor: colors.stroke }}
-                    >
-                      {/* 預覽條 */}
-                      {previewTime !== null && (
-                        <div 
-                          className="absolute top-0 left-0 h-full opacity-25 pointer-events-none transition-all duration-75" 
-                          style={{ width: `${(previewTime / duration) * 100}%`, backgroundColor: colors.button }} 
-                        />
-                      )}
-                      {/* 當前進度 */}
-                      <div 
-                        className={`absolute top-0 left-0 h-full transition-all pointer-events-none ${
-                          isScrubbing ? 'opacity-80' : 'opacity-40 group-hover/bar:opacity-50'
-                        }`} 
-                        style={{ width: `${(currentTime / duration) * 100}%`, backgroundColor: colors.button }} 
-                      />
-                      {/* AB 區間填充 */}
-                      {pointA !== null && pointB !== null && (
-                        <div 
-                          className={`absolute top-0 h-full transition-all ${
-                            isScrubbing ? 'opacity-65' : 'opacity-45 group-hover/bar:opacity-55'
-                          }`} 
-                          style={{ left: `${(pointA / duration) * 100}%`, width: `${((pointB - pointA) / duration) * 100}%`, backgroundColor: colors.tertiary }} 
-                        />
-                      )}
-                    </div>
-
-                    {/* Hover Timestamp Tooltip */}
-                    {previewTime !== null && duration > 0 && (
-                      <div 
-                        className="absolute -top-10 -translate-x-1/2 pointer-events-none z-40 transition-all duration-75"
-                        style={{ left: `${(previewTime / duration) * 100}%` }}
-                      >
-                        <div className="px-2 py-0.5 rounded text-[10px] font-mono font-bold shadow-lg border whitespace-nowrap flex flex-col items-center relative"
-                          style={{ 
-                            backgroundColor: colors.background, 
-                            color: colors.headline, 
-                            borderColor: colors.button 
-                          }}
-                        >
-                          {formatTime(previewTime)}
-                          {/* Triangle arrow pointing down */}
-                          <div className="w-1.5 h-1.5 border-r border-b rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2" 
-                            style={{ 
-                              backgroundColor: colors.background, 
-                              borderColor: colors.button 
-                            }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {/* A/B Markers */}
-                    {pointA !== null && (
-                      <div 
-                        className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none w-11 h-11 animate-fade-in" 
-                        style={{ left: `${(pointA / duration) * 100}%` }}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
-                        onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('A'); }}
-                      >
-                        {/* Large invisible hit area visual cue */}
-                        <div className={`absolute inset-0 rounded-full transition-all duration-200 pointer-events-none scale-75 ${
-                          draggingMarker === 'A' 
-                            ? 'bg-[#7f5af0]/20 scale-90' 
-                            : 'bg-[#7f5af0]/0 group-hover:bg-[#7f5af0]/10 group-active:bg-[#7f5af0]/25 group-active:scale-95'
-                        }`} />
-                        
-                        <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all duration-150 border rounded-sm relative z-10 ${
-                          draggingMarker === 'A' 
-                            ? 'scale-125 brightness-125 shadow-purple-500/20 shadow-lg ring-1 ring-[#7f5af0]/40' 
-                            : 'group-hover:scale-110 group-active:scale-115 group-active:brightness-125 hover:border-[#7f5af0]'
-                        }`} style={{ backgroundColor: colors.background, color: colors.headline, borderColor: colors.headline }}>
-                          {draggingMarker === 'A' ? formatTime(pointA) : 'A'}
-                        </div>
-                      </div>
-                    )}
-                    {pointB !== null && (
-                      <div 
-                        className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center -translate-x-1/2 cursor-ew-resize z-30 group select-none touch-none w-11 h-11 animate-fade-in" 
-                        style={{ left: `${(pointB / duration) * 100}%` }}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
-                        onTouchStart={(e) => { e.stopPropagation(); setDraggingMarker('B'); }}
-                      >
-                        {/* Large invisible hit area visual cue */}
-                        <div className={`absolute inset-0 rounded-full transition-all duration-200 pointer-events-none scale-75 ${
-                          draggingMarker === 'B' 
-                            ? 'bg-[#2cb67d]/20 scale-90' 
-                            : 'bg-[#2cb67d]/0 group-hover:bg-[#2cb67d]/10 group-active:bg-[#2cb67d]/25 group-active:scale-95'
-                        }`} />
-                        
-                        <div className={`text-[9px] px-1.5 py-0.5 font-bold shadow-md transition-all duration-150 border rounded-sm relative z-10 ${
-                          draggingMarker === 'B' 
-                            ? 'scale-125 brightness-125 shadow-emerald-500/20 shadow-lg ring-1 ring-[#2cb67d]/40' 
-                            : 'group-hover:scale-110 group-active:scale-115 group-active:brightness-125 hover:border-[#2cb67d]'
-                        }`} style={{ backgroundColor: colors.button, color: colors.buttonText, borderColor: colors.button }}>
-                          {draggingMarker === 'B' ? formatTime(pointB) : 'B'}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 微型書籤時間軸 (Bookmark Timeline) */}
-                  {duration > 0 && bookmarks.length > 0 && (
-                    <div className="relative h-4 mt-0.5 flex items-center border-t border-b border-white/[0.04] bg-white/[0.01] rounded-md overflow-visible select-none px-1">
-                      {/* Background horizontal timeline guide line */}
-                      <div className="absolute left-1 right-1 h-[2px] bg-white/[0.08] rounded-full pointer-events-none" />
-
-                      {/* Dots representation of bookmarks */}
-                      {bookmarks.map((bookmark) => {
-                        const bColorObj = bookmarkColors.find(c => c.value === (bookmark.color || 'gray')) || bookmarkColors[0];
-                        const positionPct = (bookmark.time / duration) * 100;
-                        const isCurrentActive = Math.abs(currentTime - bookmark.time) < 0.5;
-
-                        return (
-                          <div
-                            key={`timeline-${bookmark.id}`}
-                            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20 group/dot cursor-pointer"
-                            style={{ left: `${positionPct}%` }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              jumpToAndPlay(bookmark.time);
-                            }}
-                            onMouseEnter={() => setHoveredTimelineB(bookmark)}
-                            onMouseLeave={() => setHoveredTimelineB(null)}
-                          >
-                            {/* Glowing/pulse ring around active/hovered dot */}
-                            <div 
-                              className={`absolute -inset-2 rounded-full transition-all duration-300 ${
-                                isCurrentActive ? 'scale-100 opacity-50 animate-ping' : 'scale-50 opacity-0 group-hover/dot:scale-100 group-hover/dot:opacity-30'
-                              }`}
-                              style={{ backgroundColor: bColorObj.dot }}
-                            />
-
-                            {/* Core color dot */}
-                            <div 
-                              className={`w-2 h-2 rounded-full border border-black/50 shadow-sm transition-all duration-150 relative ${
-                                isCurrentActive 
-                                  ? 'scale-125 ring-2 ring-white/60 brightness-110 shadow-lg' 
-                                  : 'group-hover/dot:scale-125 hover:brightness-110'
-                              }`}
-                              style={{ 
-                                backgroundColor: bColorObj.dot,
-                                boxShadow: isCurrentActive ? `0 0 8px ${bColorObj.dot}` : undefined 
-                              }}
-                            />
-                          </div>
-                        );
-                      })}
-
-                      {/* Floating Tooltip design */}
-                      {hoveredTimelineB && (
-                        <div 
-                          className="absolute bottom-6 -translate-x-1/2 pointer-events-none z-50 animate-in fade-in zoom-in-95 duration-100"
-                          style={{ left: `${(hoveredTimelineB.time / duration) * 100}%` }}
-                        >
-                          <div 
-                            className="px-2.5 py-1.5 rounded-lg text-[10px] font-sans font-bold shadow-2xl border whitespace-nowrap flex flex-col items-center gap-0.5"
-                            style={{ 
-                              backgroundColor: '#16161a', 
-                              color: '#ffffff', 
-                              borderColor: (bookmarkColors.find(c => c.value === (hoveredTimelineB.color || 'gray')) || bookmarkColors[0]).dot 
-                            }}
-                          >
-                            <span className="opacity-50 font-mono tracking-wide text-[9px]">
-                              {formatTime(hoveredTimelineB.time)}
-                            </span>
-                            <span className="truncate max-w-[140px] font-medium text-white/95 text-[10px]">
-                              {hoveredTimelineB.label || '無標籤'}
-                            </span>
-                            <span 
-                              className="text-[8px] font-bold px-1 py-0.2 rounded-sm mt-0.5"
-                              style={{ 
-                                backgroundColor: `${(bookmarkColors.find(c => c.value === (hoveredTimelineB.color || 'gray')) || bookmarkColors[0]).dot}20`,
-                                color: (bookmarkColors.find(c => c.value === (hoveredTimelineB.color || 'gray')) || bookmarkColors[0]).dot
-                              }}
-                            >
-                              {(bookmarkColors.find(c => c.value === (hoveredTimelineB.color || 'gray')) || bookmarkColors[0]).label}
-                            </span>
-                            {/* Arrow */}
-                            <div 
-                              className="w-1.5 h-1.5 border-r border-b rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2 bg-[#16161a]" 
+    if (!copyS…7743 tokens truncated….5 h-1.5 border-r border-b rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2 bg-[#16161a]" 
                               style={{ borderColor: (bookmarkColors.find(c => c.value === (hoveredTimelineB.color || 'gray')) || bookmarkColors[0]).dot }}
                             />
                           </div>
@@ -4083,3 +3597,4 @@ export default function App() {
     </div>
   );
 }
+
