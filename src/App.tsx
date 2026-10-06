@@ -492,7 +492,8 @@ export default function App() {
   };
   const attachPlayer = useCallback((player: any) => {
     if (!player) {
-      stopNativeMedia(ownedMediaRef.current);
+      const media = ownedMediaRef.current ?? playerRef.current?.getInternalPlayer?.();
+      if (media instanceof HTMLMediaElement) stopNativeMedia(media);
       ownedMediaRef.current = null;
     }
     playerRef.current = player;
@@ -2493,6 +2494,7 @@ export default function App() {
                         setIsPlaying(false); savePlayback();
                       }}
                       onEnded={() => {
+                        if (activePlaybackUrlRef.current !== playbackUrl) return;
                         if (isRepeatEnabled) {
                           if (pointA !== null) {
                             jumpToAndPlay(pointA);
@@ -2505,10 +2507,13 @@ export default function App() {
                       }}
                       progressInterval={100}
                       onProgress={(state: any) => {
+                        if (activePlaybackUrlRef.current !== playbackUrl) return;
                         if (!rememberProgress(state.playedSeconds)) return;
                         setCurrentTime(state.playedSeconds);
                       }}
-                      onDuration={(dur: number) => setDuration(dur)}
+                      onDuration={(dur: number) => {
+                        if (activePlaybackUrlRef.current === playbackUrl) setDuration(dur);
+                      }}
                       onReady={() => {
                         if (activePlaybackUrlRef.current !== playbackUrl) return;
                         const media = playerRef.current?.getInternalPlayer?.();
