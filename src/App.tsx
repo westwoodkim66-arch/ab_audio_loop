@@ -111,6 +111,98 @@ function bufferToWav(buffer: AudioBuffer): Blob {
   return new Blob([bufferArr], { type: 'audio/wav' });
 }
 
+// Direct audio has one owned native element. In particular, a proxy fallback
+// must release the previous element even if its play() promise is still pending.
+const NativeAudioPlayer = React.forwardRef<any, any>(function NativeAudioPlayer(props, ref) {
+  const mediaRef = useRef<HTMLAudioElement | null>(null);
+  const callbacksRef = useRef(props);
+  callbacksRef.current = props;
+  const generationRef = useRef(0);
+
+  React.useImperativeHandle(ref, () => ({
+    getInternalPlayer: () => mediaRef.current,
+    getCurrentTime: () => mediaRef.current?.currentTime ?? 0,
+    getDuration: () => mediaRef.current?.duration ?? 0,
+    seekTo: (time: number, type = 'seconds') => {
+      const media = mediaRef.current;
+      if (!media || !Number.isFinite(time)) return;
+      const target = type === 'fraction' ? time * media.duration : time;
+      if (Number.isFinite(target)) media.currentTime = Math.max(0, target);
+    }
+  }), []);
+
+  useLayoutEffect(() => {
+    const media = mediaRef.current;
+    if (!media) return;
+    const generation = ++generationRef.current;
+    let disposed = false;
+    // Restore src during React StrictMode's effect replay as well.
+    media.src = props.url;
+    const onPageHide = () => { media.pause(); };
+    window.addEventListener('pagehide', onPageHide);
+    const progressTimer = window.setInterval(() => {
+      if (!disposed && generationRef.current === generation && !media.paused) {
+        callbacksRef.current.onProgress?.({ playedSeconds: media.currentTime });
+      }
+    }, props.progressInterval || 100);
+    return () => {
+      disposed = true;
+      ++generationRef.current;
+      window.clearInterval(progressTimer);
+      window.removeEventListener('pagehide', onPageHide);
+      media.pause();
+      media.removeAttribute('src');
+      media.load();
+    };
+  }, [props.url]);
+
+  useEffect(() => {
+    const media = mediaRef.current;
+    if (!media) return;
+    const generation = generationRef.current;
+    if (!props.playing) { media.pause(); return; }
+    callbacksRef.current.onBeforePlay?.();
+    // Also stop an older main element that is still attached during a remount.
+    document.querySelectorAll<HTMLMediaElement>('[data-ab-main-audio]').forEach(other => {
+      if (other !== media) other.pause();
+    });
+    const promise = media.play();
+    promise?.then(() => {
+      if (generationRef.current !== generation && mediaRef.current !== media) media.pause();
+    }).catch(error => {
+      if (generationRef.current === generation && error?.name !== 'AbortError') {
+        callbacksRef.current.onError?.(error);
+      }
+    });
+  }, [props.playing, props.url]);
+
+  useEffect(() => {
+    const media = mediaRef.current;
+    if (!media) return;
+    media.volume = Math.max(0, Math.min(1, props.volume ?? 1));
+    media.playbackRate = props.playbackRate ?? 1;
+    media.loop = !!props.loop;
+  }, [props.volume, props.playbackRate, props.loop, props.url]);
+
+  return <audio
+    ref={mediaRef}
+    data-ab-main-audio=""
+    preload="metadata"
+    playsInline
+    onLoadedMetadata={() => {
+      const media = mediaRef.current;
+      if (!media) return;
+      callbacksRef.current.onDuration?.(media.duration);
+      callbacksRef.current.onReady?.();
+    }}
+    onPlay={() => { if (mediaRef.current && !mediaRef.current.paused) callbacksRef.current.onPlay?.(); }}
+    onPause={() => { if (mediaRef.current?.paused) callbacksRef.current.onPause?.(); }}
+    onEnded={() => callbacksRef.current.onEnded?.()}
+    onTimeUpdate={() => callbacksRef.current.onProgress?.({ playedSeconds: mediaRef.current?.currentTime ?? 0 })}
+    onError={() => callbacksRef.current.onError?.(mediaRef.current?.error)}
+  />;
+});
+
 export default function App() {
   // 配色方案常量 (根據附圖)
   const colors = {
@@ -2070,7 +2162,11 @@ export default function App() {
 
 
 
-  const Player = ReactPlayer as any;
+  // Keep third-party embeds on ReactPlayer; direct audio uses a single
+  // native element with deterministic teardown rather than async player loading.
+  const isDirectAudio = !!audioUrl && !isVideo
+    && !/(?:soundcloud\\.com|mixcloud\\.com|wistia\\.(?:com|net)|streamable\\.com)/i.test(audioUrl);
+  const Player = (isDirectAudio ? NativeAudioPlayer : ReactPlayer) as any;
 
   const skip = (amount: number) => {
     if (playerRef.current) {
@@ -2493,6 +2589,7 @@ export default function App() {
                       style={{ position: 'absolute', top: 0, left: 0 }}
                       url={playbackUrl}
                       playing={isPlaying}
+                      onBeforePlay={claimPlayback}
                       volume={activeVolume}
                       playbackRate={playbackRate}
                       loop={isRepeatEnabled && pointA === null && pointB === null}
