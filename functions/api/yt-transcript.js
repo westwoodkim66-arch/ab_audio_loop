@@ -2,7 +2,7 @@ const SUPADATA_BASE_URL = "https://api.supadata.ai/v1/transcript";
 
 export async function onRequestGet(context) {
   const { searchParams } = new URL(context.request.url);
-  const videoUrl = searchParams.get("url") || "";
+  let videoUrl = searchParams.get("url") || "";
   const jobId = searchParams.get("jobId") || "";
   const requestedMode = searchParams.get("mode") || "native";
   const mode = ["native", "auto", "generate"].includes(requestedMode) ? requestedMode : "native";
@@ -29,9 +29,14 @@ export async function onRequestGet(context) {
     }, 400);
   }
 
+  const normalized = normalizeMediaUrl(videoUrl);
+  if (normalized.error) return jsonResponse({ error: "UNSUPPORTED_MEDIA_URL", message: normalized.error }, 400);
+  videoUrl = normalized.url;
+
   const endpoint = new URL(SUPADATA_BASE_URL);
   endpoint.searchParams.set("url", videoUrl);
   endpoint.searchParams.set("mode", mode);
+  endpoint.searchParams.set("text", "false");
   return fetchSupadata(endpoint.toString(), apiKey);
 }
 
@@ -76,7 +81,8 @@ async function fetchSupadata(endpoint, apiKey) {
     }, 502);
   }
 
-  const transcript = normalizeTranscript(data?.content);
+  const result = data?.result || data;
+  const transcript = normalizeTranscript(result?.content);
   if (transcript.length === 0) {
     return jsonResponse({
       error: "NO_CAPTIONS",
@@ -86,8 +92,8 @@ async function fetchSupadata(endpoint, apiKey) {
 
   return jsonResponse({
     transcript,
-    language: data?.lang || transcript[0]?.lang || "",
-    availableLanguages: Array.isArray(data?.availableLangs) ? data.availableLangs : [],
+    language: result?.lang || transcript[0]?.lang || "",
+    availableLanguages: Array.isArray(result?.availableLangs) ? result.availableLangs : [],
     provider: "supadata",
     mode: data?.mode || "",
   });
@@ -106,7 +112,15 @@ function normalizeTranscript(content) {
 }
 
 function mapSupadataError(status, data) {
-  const upstreamMessage = data?.message || data?.details;
+  const detail = typeof data?.details === "string" ? data.details : "";
+  const message = typeof data?.message === "string" ? data.message : "";
+  const upstreamMessage = detail || message;
+  if (status === 400 || data?.error === "invalid-request") {
+    return { status: 400, body: {
+      error: "INVALID_TRANSCRIPT_REQUEST",
+      message: `字幕服務拒絕這個來源：${(upstreamMessage || "網址或請求參數無效").slice(0, 500)}。請確認是公開影片網址；也可上傳音檔，以免費 Whisper 辨識。`,
+    } };
+  }
   if (status === 401) {
     return { status: 503, body: { error: "SUPADATA_AUTH_ERROR", message: "字幕服務金鑰無效，請重新設定 SUPADATA_API_KEY。" } };
   }
@@ -133,7 +147,7 @@ function isAllowedMediaUrl(value, mode) {
     const url = new URL(value);
     if (url.protocol !== "https:" && url.protocol !== "http:") return false;
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
-    const isYoutube = host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
+    const isYoutube = host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be" || host === "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com");
     return mode === "native" ? isYoutube : true;
   } catch {
     return false;
@@ -148,4 +162,23 @@ function jsonResponse(data, status = 200) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+function normalizeMediaUrl(value) {
+  const url = new URL(value.trim());
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const youtube = host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com")
+    || host === "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com");
+  if (youtube) {
+    const id = host === "youtu.be" ? url.pathname.split("/")[1]
+      : url.searchParams.get("v") || url.pathname.match(/^\/(?:embed|shorts|live|v)\/([^/]+)/)?.[1];
+    if (!id || !/^[A-Za-z0-9_-]{11}$/.test(id)) return { error: "請使用單支 YouTube 影片的分享網址，不能使用頻道或播放清單網址。" };
+    return { url: `https://www.youtube.com/watch?v=${id}` };
+  }
+  const matches = domain => host === domain || host.endsWith(`.${domain}`);
+  if (["dailymotion.com", "dai.ly", "vimeo.com", "twitch.tv"].some(matches)) {
+    return { error: "目前雲端語音辨識不支援這個影片平台。請上傳該影片的音檔，再按「AI 語音辨識」使用免費 Whisper；若已有 SRT／VTT，也可直接匯入。" };
+  }
+  url.hash = "";
+  return { url: url.toString() };
 }
