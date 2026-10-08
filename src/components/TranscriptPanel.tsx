@@ -236,7 +236,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
 
   // Update active index
   useEffect(() => {
-    if (lines.length === 0) return;
+    if (lines.length === 0) { setActiveIndex(-1); return; }
     
     // Choose the newest cue that has started. This prevents an older overlapping cue from winning.
     let idx = -1;
@@ -256,25 +256,49 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
     }
   }, [currentTime, lines, activeIndex]);
 
-  // Scroll when index changes
+  const hasTimedLines = lines.some(line => typeof line.startTime === 'number'
+    && typeof line.endTime === 'number' && line.startTime >= 0 && line.endTime > line.startTime);
+
+  // Follow the active cue after captions/translation/layout have rendered, including
+  // when the cue index itself is unchanged. Scroll the page as well as the inner panel.
   useEffect(() => {
-    if (autoScroll && activeIndex !== -1 && scrollContainerRef.current) {
-        const container = scrollContainerRef.current;
-        const activeElement = container.querySelector(`[data-index="${activeIndex}"]`) as HTMLElement;
-        if (activeElement) {
-            const elementRect = activeElement.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
-            
-            // Calculate distance to move element to the vertical center of the container
-            const distanceY = (elementRect.top + elementRect.height / 2) - (containerRect.top + containerRect.height / 2);
-            
-            container.scrollBy({
-                top: distanceY,
-                behavior: 'smooth'
-            });
+    const container = scrollContainerRef.current;
+    if (!autoScroll || activeIndex < 0 || !container) return;
+    const activeElement = container.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`);
+    if (!activeElement) return;
+    let frame = 0;
+    const follow = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const sticky = document.getElementById('sticky-header');
+        const stickyRect = sticky?.getBoundingClientRect();
+        const stickyPosition = sticky ? getComputedStyle(sticky).position : '';
+        const safeTop = stickyRect && (stickyPosition === 'sticky' || stickyPosition === 'fixed')
+          ? Math.max(0, Math.min(stickyRect.bottom, window.innerHeight * 0.6)) + 12 : 12;
+        const rect = container.getBoundingClientRect();
+        const visibleHeight = Math.min(container.clientHeight, Math.max(80, window.innerHeight - safeTop - 16));
+        const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+        // A scrolled inner panel alone does not help when it is below the viewport.
+        if (rect.top < safeTop - 2 || rect.top + visibleHeight > window.innerHeight - 8) {
+          window.scrollBy({ top: rect.top - safeTop, behavior });
         }
-    }
-  }, [activeIndex, autoScroll]);
+        const cue = activeElement.getBoundingClientRect();
+        const target = container.scrollTop + cue.top - rect.top - container.clientTop
+          - Math.max(0, (visibleHeight - cue.height) / 2);
+        container.scrollTo({ top: Math.max(0, target), behavior });
+      });
+    };
+    follow();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(follow) : null;
+    observer?.observe(container);
+    observer?.observe(activeElement);
+    window.addEventListener('resize', follow);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener('resize', follow);
+    };
+  }, [activeIndex, autoScroll, lines, subtitleFontSize]);
 
   useEffect(() => () => {
     activeJobRef.current?.controller.abort();
@@ -1270,6 +1294,13 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
          </div>
       )}
 
+      {autoScroll && lines.length > 0 && !hasTimedLines && (
+        <p role="status" className="px-4 py-2 text-sm text-[#a78bfa] border-t border-white/10">
+          這份文稿尚無時間戳，無法隨播放自動捲動。{canReadAudio
+            ? '請先按「同步音檔字幕」，取得實際語音時間後即可跟隨播放。'
+            : '請讀取影片字幕，或匯入含時間戳的 SRT／VTT 字幕。'}
+        </p>
+      )}
       {lines.length > 0 && (
         <div ref={scrollContainerRef} className="transcript-scroll p-3 bg-[#16161a] rounded-b-2xl md:rounded-b-3xl w-full border-t border-white/5 relative z-10 transition-all max-h-[60dvh] overflow-y-auto styled-scrollbar">
             <div className="secondary-tool flex border-b border-white/5 pb-4 mb-4 gap-4 items-center">
