@@ -177,7 +177,7 @@ function normalizeMediaUrl(value) {
   }
   const matches = domain => host === domain || host.endsWith(`.${domain}`);
   if (["dailymotion.com", "dai.ly", "vimeo.com", "twitch.tv"].some(matches)) {
-    return { error: "目前雲端語音辨識不支援這個影片平台。請上傳該影片的音檔，再按「AI 語音辨識」使用免費 Whisper；若已有 SRT／VTT，也可直接匯入。" };
+    return { error: "雲端字幕服務不接受此平台的影片頁面網址。請按「匯入影片／音軌辨識」選取同一影片的完整 MP4 或音檔，以免費 Whisper 產生字幕與時間軸並保留影片播放；也可匯入 SRT／VTT。" };
   }
   url.hash = "";
   return { url: url.toString() };
