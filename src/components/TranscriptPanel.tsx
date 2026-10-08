@@ -78,6 +78,19 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
   const [showCopyPasteGuide, setShowCopyPasteGuide] = useState(false);
   const [placeholderCount, setPlaceholderCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionFileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionSourceRef = useRef<{ media: string; url: string } | null>(null);
+  const [recognitionFileName, setRecognitionFileName] = useState('');
+  useEffect(() => {
+    setRecognitionFileName('');
+    return () => {
+      const source = recognitionSourceRef.current;
+      if (source?.media === audioUrl) {
+        recognitionSourceRef.current = null;
+        URL.revokeObjectURL(source.url);
+      }
+    };
+  }, [audioUrl]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const whisperWorkerRef = useRef<Worker | null>(null);
   const [lastTranscriptMode, setLastTranscriptMode] = useState<TranscriptMode>('native');
@@ -586,10 +599,17 @@ ${JSON.stringify(chunk)}
     if (!response.ok && source !== url) response = await fetch(url, { signal: job.controller.signal });
     if (!response.ok) throw new Error(`無法讀取音檔（HTTP ${response.status}）`);
     const encoded = await response.arrayBuffer();
+    checkJob(job);
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     const context = new AudioContextClass();
     try {
-      const decoded: AudioBuffer = await context.decodeAudioData(encoded);
+      let decoded: AudioBuffer;
+      try {
+        decoded = await context.decodeAudioData(encoded);
+      } catch {
+        checkJob(job);
+        throw new Error('此檔案的音軌無法由瀏覽器解碼。請改用同一影片的 MP3、M4A 或 WAV 音檔；無音軌、加密或不支援的影片格式無法辨識。');
+      }
       checkJob(job);
       if (decoded.duration > 60 * 60) throw new Error("瀏覽器版 Whisper 目前支援最長 60 分鐘的音檔");
       return resampleAudioRegion(decoded, region);
@@ -598,10 +618,10 @@ ${JSON.stringify(chunk)}
     }
   };
 
-  const transcribeLocalWithWhisper = async (job: SubtitleJob, region?: AudioRegion, referenceLines?: any[], refresh = false) => {
+  const transcribeLocalWithWhisper = async (job: SubtitleJob, region?: AudioRegion, referenceLines?: any[], refresh = false, sourceUrl = audioUrl) => {
     setLastTranscriptMode('generate');
     setIsProcessing(true);
-    setStatusText(region ? `正在準備 A/B 片段（${(region.end - region.start).toFixed(1)} 秒）…` : "正在解碼本機音檔…");
+    setStatusText(region ? `正在準備 A/B 片段（${(region.end - region.start).toFixed(1)} 秒）…` : "正在解碼影片／音檔的音軌…");
     setShowCopyPasteGuide(false);
     try {
       const stableKey = mediaKey || await resolveTranscriptMediaKey(audioUrl, job.controller.signal);
@@ -622,7 +642,7 @@ ${JSON.stringify(chunk)}
           return;
         }
       }
-      const { samples, start, end } = await decodeAudioTo16kMono(audioUrl, job, region);
+      const { samples, start, end } = await decodeAudioTo16kMono(sourceUrl, job, region);
       checkJob(job);
       setStatusText("正在載入免費 Whisper 模型（首次使用時間較長）…");
       const worker = ensureWhisperWorker();
@@ -706,6 +726,30 @@ ${JSON.stringify(chunk)}
     }
   };
 
+  // Decode an imported source without replacing or playing the embedded video.
+  const handleRecognitionFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !audioUrl) return;
+    if (file.size > 50 * 1024 * 1024) {
+      setStatusText('辨識檔案請小於 50 MB；較大的影片請先轉成 MP3／M4A 音檔。');
+      return;
+    }
+    if (!/^(audio|video)\//i.test(file.type) && !/\.(mp4|webm|mov|mp3|m4a|aac|wav|ogg|flac)$/i.test(file.name)) {
+      setStatusText('請選取同一影片的完整 MP4／WebM，或 MP3／M4A／WAV 音檔。');
+      return;
+    }
+    const job = beginJob(); // Abort old work before releasing its source.
+    const previous = recognitionSourceRef.current;
+    const sourceUrl = URL.createObjectURL(file);
+    recognitionSourceRef.current = { media: audioUrl, url: sourceUrl };
+    if (previous) URL.revokeObjectURL(previous.url);
+    setRecognitionFileName(file.name);
+    const reference = lines.length && !hasTimedLines ? lines.map(line => ({ ...line,
+      providedTranslation: line.translation })) : undefined;
+    await transcribeLocalWithWhisper(job, undefined, reference, true, sourceUrl);
+  };
+
   const loadRemoteTranscript = async (mode: TranscriptMode, refresh = false) => {
     const job = beginJob();
     setLastTranscriptMode(mode);
@@ -715,10 +759,12 @@ ${JSON.stringify(chunk)}
       setTimeout(() => { if (isCurrentJob(job)) setStatusText(""); }, 3000);
       return;
     }
-    if (mode === 'generate' && canReadAudio) {
+    const recognitionSource = recognitionSourceRef.current;
+    const importedSource = recognitionSource?.media === audioUrl ? recognitionSource.url : null;
+    if (mode === 'generate' && (canReadAudio || importedSource)) {
       const reference = lines.length && !hasTimedLines ? lines.map(line => ({ ...line,
         providedTranslation: line.translation })) : undefined;
-      await transcribeLocalWithWhisper(job, undefined, reference, refresh);
+      await transcribeLocalWithWhisper(job, undefined, reference, refresh, importedSource || audioUrl);
       return;
     }
     if (!/^https?:\/\//i.test(audioUrl)) {
@@ -1174,11 +1220,20 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <button
                onClick={loadAiTranscript}
                disabled={isProcessing || !audioUrl}
-               title="影片平台由雲端 AI 聽寫；音檔與 MP4 直連使用瀏覽器內免費 Whisper"
+               title={recognitionFileName ? '以已匯入的音軌使用免費 Whisper 辨識目前影片' : '支援的平台由雲端 AI 聽寫；音檔使用免費 Whisper；Vimeo 可匯入影片或音軌辨識'}
                className="px-3 py-1.5 rounded-lg bg-[#7f5af0] text-white flex items-center gap-1.5 text-sm font-bold opacity-90 hover:opacity-100 disabled:opacity-50 transition-all">
                 <AudioLines className="w-4 h-4" />
                 AI 語音辨識
             </button>
+            <button type="button"
+               onClick={() => recognitionFileInputRef.current?.click()}
+               disabled={isProcessing || !audioUrl}
+               title="選取同一影片的完整影片檔或音檔，免費 Whisper 在本機辨識，並保留目前影片播放器"
+               className="px-3 py-1.5 rounded-lg border border-[#7f5af0]/50 text-[#a78bfa] flex items-center gap-1.5 text-sm font-bold disabled:opacity-40 hover:bg-[#7f5af0]/10">
+               <Upload className="w-4 h-4" />匯入影片／音軌辨識
+            </button>
+            <input type="file" ref={recognitionFileInputRef} onChange={handleRecognitionFile}
+               accept="audio/*,video/mp4,video/webm,.mp4,.webm,.mov,.mp3,.m4a,.wav" className="hidden" />
             <button type="button" onClick={synchronizeSuppliedSubtitles}
                disabled={isProcessing || !canReadAudio || !lines.length}
                title="用免費 Whisper 取得實際語音時間，對齊已輸入的字幕；首次會下載模型"
@@ -1208,6 +1263,10 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             </button>
             <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} accept="image/*,.srt,.vtt,.txt" className="hidden" />
         </div>
+        {recognitionFileName && <p className="px-4 pb-3 text-xs text-[#94a1b2] break-all">
+          辨識音軌：{recognitionFileName}。Whisper 在本機執行，未另行播放；字幕保存在目前影片下。
+          請使用與影片相同、從頭開始的完整音軌；若時間有差異，可調整字幕偏移。
+        </p>}
       </div>
 
       {modelState !== 'idle' && (
