@@ -715,8 +715,10 @@ ${JSON.stringify(chunk)}
       setTimeout(() => { if (isCurrentJob(job)) setStatusText(""); }, 3000);
       return;
     }
-    if (mode === 'generate' && audioUrl.startsWith('blob:')) {
-      await transcribeLocalWithWhisper(job, undefined, undefined, refresh);
+    if (mode === 'generate' && canReadAudio) {
+      const reference = lines.length && !hasTimedLines ? lines.map(line => ({ ...line,
+        providedTranslation: line.translation })) : undefined;
+      await transcribeLocalWithWhisper(job, undefined, reference, refresh);
       return;
     }
     if (!/^https?:\/\//i.test(audioUrl)) {
@@ -812,7 +814,7 @@ ${JSON.stringify(chunk)}
   const loadAiTranscript = () => loadRemoteTranscript('generate');
   const validRegion = typeof pointA === 'number' && typeof pointB === 'number'
     && Number.isFinite(pointA) && Number.isFinite(pointB) && pointA >= 0 && pointB > pointA;
-  const embeddedMedia = /(?:youtube\.com|youtu\.be|dailymotion\.com|dai\.ly|vimeo\.com)/i.test(audioUrl);
+  const embeddedMedia = /(?:youtube\.com|youtube-nocookie\.com|youtu\.be|dailymotion\.com|dai\.ly|vimeo\.com|twitch\.tv|facebook\.com|instagram\.com|tiktok\.com|twitter\.com|\/\/x\.com)/i.test(audioUrl);
   const canReadAudio = !!audioUrl && !embeddedMedia;
   useEffect(() => {
     // Check the subtitle cache first: revisiting an already recognized file should
@@ -1172,7 +1174,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <button
                onClick={loadAiTranscript}
                disabled={isProcessing || !audioUrl}
-               title="YouTube／公開媒體網址由雲端 AI 聽寫；本機音檔使用瀏覽器內免費 Whisper"
+               title="影片平台由雲端 AI 聽寫；音檔與 MP4 直連使用瀏覽器內免費 Whisper"
                className="px-3 py-1.5 rounded-lg bg-[#7f5af0] text-white flex items-center gap-1.5 text-sm font-bold opacity-90 hover:opacity-100 disabled:opacity-50 transition-all">
                 <AudioLines className="w-4 h-4" />
                 AI 語音辨識
