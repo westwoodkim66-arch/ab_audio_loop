@@ -1718,6 +1718,13 @@ export default function App() {
         const initialVol = volume;
 
         const intervalId = setInterval(() => {
+          // A pending fade must not jump back to A after the user cancels looping.
+          if (!stateRef.current.isRepeatEnabled) {
+            clearInterval(intervalId);
+            setActiveVolume(stateRef.current.volume);
+            isFadingRef.current = false;
+            return;
+          }
           currentStep++;
           const targetVol = initialVol * (1 - currentStep / fadeSteps);
           setActiveVolume(targetVol);
@@ -2078,6 +2085,15 @@ export default function App() {
     const start = Math.max(0, line.startTime - subtitleTimeShift);
     const end = duration > 0 ? Math.min(duration, line.endTime - subtitleTimeShift) : line.endTime - subtitleTimeShift;
     if (end <= start) { setError('這句字幕的時間超出目前媒體範圍。'); return; }
+    // Pressing the selected sentence again disables looping without seeking or
+    // pausing; keep the A/B marks so the user can enable the same range later.
+    if (isRepeatEnabled && pointA !== null && pointB !== null
+      && Math.abs(pointA - start) < 0.02 && Math.abs(pointB - end) < 0.02) {
+      stateRef.current.isRepeatEnabled = false;
+      setIsRepeatEnabled(false);
+      setError('');
+      return;
+    }
     setPointA(start);
     setPointB(end);
     setIsRepeatEnabled(true);
