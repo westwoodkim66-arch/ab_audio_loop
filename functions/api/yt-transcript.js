@@ -77,7 +77,7 @@ async function fetchSupadata(endpoint, apiKey) {
   if (data?.status === "failed") {
     return jsonResponse({
       error: "TRANSCRIPT_JOB_FAILED",
-      message: data?.error?.message || data?.error?.details || "字幕處理失敗，請稍後再試。",
+      message: data?.error?.details || data?.error?.message || "字幕處理失敗，請稍後再試。",
     }, 502);
   }
 
