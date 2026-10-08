@@ -1,3 +1,4 @@
+import { onRequestGet } from './functions/api/yt-transcript.js';
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
@@ -93,62 +94,11 @@ async function startServer() {
 
   // API 路由：獲取 YouTube 字幕
   app.get("/api/yt-transcript", async (req, res) => {
-    try {
-      const apiKey = process.env.SUPADATA_API_KEY;
-      if (!apiKey) {
-        return res.status(503).json({ error: "SUPADATA_NOT_CONFIGURED", message: "字幕服務尚未設定，請加入 SUPADATA_API_KEY。" });
-      }
-
-      const jobId = typeof req.query.jobId === "string" ? req.query.jobId : "";
-      const videoUrl = typeof req.query.url === "string" ? req.query.url : "";
-      const requestedMode = typeof req.query.mode === "string" ? req.query.mode : "native";
-      const mode = ["native", "auto", "generate"].includes(requestedMode) ? requestedMode : "native";
-      if (!jobId && !videoUrl) {
-        return res.status(400).json({ error: "INVALID_YOUTUBE_URL", message: "請先載入有效的 YouTube 網址。" });
-      }
-
-      const endpoint = jobId
-        ? `https://api.supadata.ai/v1/transcript/${encodeURIComponent(jobId)}`
-        : `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(videoUrl)}&mode=${mode}`;
-      const upstream = await fetch(endpoint, { headers: { "x-api-key": apiKey, "Accept": "application/json" } });
-      const data: any = await upstream.json().catch(() => ({}));
-
-      if (!upstream.ok) {
-        const messages: Record<number, string> = {
-          401: "字幕服務金鑰無效，請重新設定 SUPADATA_API_KEY。",
-          402: "字幕服務目前沒有可用額度，請檢查 Supadata 方案。",
-          404: "這部影片沒有可用的 YouTube 字幕。",
-          429: "字幕讀取次數暫時達到上限，請稍後再試。",
-        };
-        return res.status(upstream.status >= 500 ? 502 : upstream.status).json({
-          error: data.error || "TRANSCRIPT_SERVICE_ERROR",
-          message: messages[upstream.status] || data.message || data.details || "字幕服務無法處理這部影片。",
-        });
-      }
-
-      if (upstream.status === 202 || data.jobId || data.status === "queued" || data.status === "active") {
-        return res.status(202).json({ status: data.status || "queued", jobId: data.jobId });
-      }
-      if (data.status === "failed") {
-        return res.status(502).json({ error: "TRANSCRIPT_JOB_FAILED", message: data.error?.message || "字幕處理失敗。" });
-      }
-
-      const transcript = Array.isArray(data.content)
-        ? data.content.filter((item: any) => typeof item?.text === "string" && item.text.trim())
-        : [];
-      if (transcript.length === 0) {
-        return res.status(404).json({ error: "NO_CAPTIONS", message: "這部影片沒有可用的 YouTube 字幕。" });
-      }
-      return res.json({
-        transcript,
-        language: data.lang || transcript[0]?.lang || "",
-        availableLanguages: Array.isArray(data.availableLangs) ? data.availableLangs : [],
-        provider: "supadata",
-      });
-    } catch (error: any) {
-      console.error("Supadata Transcript error:", error);
-      res.status(502).json({ error: "TRANSCRIPT_SERVICE_UNAVAILABLE", message: "目前無法連線字幕服務，請稍後再試。" });
-    }
+    const response = await onRequestGet({
+      request: new Request(`http://localhost${req.originalUrl}`),
+      env: { SUPADATA_API_KEY: process.env.SUPADATA_API_KEY },
+    });
+    res.status(response.status).type('application/json').send(await response.text());
   });
 
   // API 路由：Gemini Proxy
