@@ -1359,10 +1359,10 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
                               disabled={!canLoop}
                               aria-label={`循環第 ${lIdx + 1} 句字幕`}
                               aria-pressed={!!isLoopSelected}
-                              title={canLoop ? '將此句設為 A/B 並循環播放' : '這句字幕沒有有效起訖時間'}
+                              title={canLoop ? (isLoopSelected ? '取消此句循環，繼續播放' : '將此句設為 A/B 並循環播放') : '這句字幕沒有有效起訖時間'}
                               onClick={event => { event.stopPropagation(); if (canLoop) onLoopLine(line); }}
                               className={`shrink-0 min-h-10 px-2 rounded-lg text-xs font-bold border flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed ${isLoopSelected ? 'bg-[#7f5af0] text-white border-[#7f5af0]' : 'text-[#a78bfa] border-[#7f5af0]/30 hover:bg-[#7f5af0]/20'}`}>
-                              <RotateCcw className="w-4 h-4" />循環
+                              <RotateCcw className="w-4 h-4" />{isLoopSelected ? '取消循環' : '循環'}
                             </button>}
                             <div className="flex flex-wrap items-start gap-y-1 gap-x-1 flex-1 min-w-0">
                                 {line.words.map((word, idx) => {
