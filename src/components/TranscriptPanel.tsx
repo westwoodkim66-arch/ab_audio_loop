@@ -1,3 +1,4 @@
+import { OptionalSubtitleAnalysis } from '../utils/optionalSubtitleAnalysis';
 import React, { useState, useRef, useEffect } from 'react';
 import { Type } from "@google/genai";
 import { Copy, Upload, Youtube, Image as ImageIcon, FileText, Loader2, PlayCircle, Settings2, AudioLines, RotateCcw } from 'lucide-react';
@@ -376,7 +377,8 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
       const rawData = prepareReadableTranscript(input);
 
       const CHUNK_SIZE = 12;
-      const MAX_CONCURRENT_CHUNKS = 3;
+      const MAX_CONCURRENT_CHUNKS = 1;
+      const optionalAnalysis = new OptionalSubtitleAnalysis();
       const chunks = Array.from({ length: Math.ceil(rawData.length / CHUNK_SIZE) }, (_, index) =>
         rawData.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE)
       );
@@ -384,7 +386,7 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
         chunk.map((item: any, itemIndex: number) => ({
           id: item.id || `pending_${chunkIndex}_${itemIndex}`,
           originalText: item.originalText || "",
-          translation: item.providedTranslation || "分析中…",
+          translation: item.providedTranslation || "",
           startTime: item.startTime ?? -1,
           endTime: item.endTime ?? -1,
           words: attachWordTimings(plainSubtitleWords(item.originalText || ''), item.wordTimings)
@@ -393,9 +395,9 @@ export default function TranscriptPanel({ playerRef, audioUrl, currentTime, init
       const processedChunks: SubtitleLine[][] = new Array(chunks.length);
       let completedChunks = 0;
 
-      // 先顯示原始字幕；翻譯與讀音在背景並行補上。
+      // 時間軸不依賴翻譯服務；原文與實測逐字時間先顯示。
       publish(placeholderChunks.flat());
-      setStatusText(`字幕已載入，正在並行分析 ${chunks.length} 批內容...`);
+      setStatusText(`字幕已載入，正在補上 ${chunks.length} 批翻譯...`);
 
       const processChunk = async (chunk: any[], chunkIndex: number) => {
         const i = chunkIndex * CHUNK_SIZE;
@@ -433,7 +435,7 @@ ${JSON.stringify(chunk)}
 `;
 
         const response = await fetchGemini({
-          model: "gemini-2.5-flash",
+          model: "gemini-2.5-flash-lite",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -501,7 +503,19 @@ ${JSON.stringify(chunk)}
         while (nextChunkIndex < chunks.length) {
           checkJob(job);
           const chunkIndex = nextChunkIndex++;
-          await processChunk(chunks[chunkIndex], chunkIndex);
+          const completed = await optionalAnalysis.run(async () => {
+            await processChunk(chunks[chunkIndex], chunkIndex);
+            checkJob(job);
+            return true;
+          });
+          checkJob(job);
+          if (!completed) {
+            // Keep supplied translations and measured word timestamps intact, and
+            // return complete usable lines so callers can cache without rerunning ASR.
+            processedChunks[chunkIndex] = placeholderChunks[chunkIndex];
+            completedChunks += 1;
+            publish(processedChunks.flatMap((processed, index) => processed || placeholderChunks[index]));
+          }
         }
       };
       await Promise.all(
@@ -509,8 +523,12 @@ ${JSON.stringify(chunk)}
       );
       checkJob(job);
       
-      setStatusText("所有文稿處理完成！");
-      setTimeout(() => { if (isCurrentJob(job)) setStatusText(""); }, 3000);
+      setStatusText(optionalAnalysis.unavailable
+        ? "字幕原文與時間軸已保留並可使用；翻譯服務暫時無法使用，已停止後續翻譯。"
+        : "所有文稿處理完成！");
+      if (!optionalAnalysis.unavailable) {
+        setTimeout(() => { if (isCurrentJob(job)) setStatusText(""); }, 3000);
+      }
       setIsProcessing(false);
       return processedChunks.flat();
     } catch (e: any) {
@@ -977,7 +995,7 @@ ${JSON.stringify(chunk)}
                     if(resizedBase64) {
                         try {
                             const response = await fetchGemini({
-                                model: "gemini-2.5-flash",
+                                model: "gemini-2.5-flash-lite",
                                 contents: [
                                     {
                                         role: "user",
@@ -1116,7 +1134,7 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
 `;
 
             const response = await fetchGemini({
-              model: "gemini-2.5-flash",
+              model: "gemini-2.5-flash-lite",
               contents: prompt,
               config: {
                  responseMimeType: "application/json",
@@ -1468,3 +1486,4 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
     </div>
   );
 }
+
