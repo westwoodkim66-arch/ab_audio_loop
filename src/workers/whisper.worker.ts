@@ -1,4 +1,5 @@
 import { env, pipeline } from '@huggingface/transformers';
+import { recognizeWithQualityCheck } from '../utils/whisperRecognition';
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
@@ -37,16 +38,20 @@ self.onmessage = async (event: MessageEvent<{ type?: 'prepare'; audio?: ArrayBuf
     if (!event.data.audio) throw new Error('沒有音訊資料');
     self.postMessage({ type: 'status', message: 'Whisper 正在辨識語音…' });
     const samples = new Float32Array(event.data.audio);
-    const options = { task: 'transcribe', chunk_length_s: 30, stride_length_s: 5 };
-    let output;
-    try {
-      output = await transcriber(samples, { ...options, return_timestamps: 'word' });
-      output.wordTimestamped = true;
-    } catch {
-      self.postMessage({ type: 'status', message: '逐字時間戳無法取得，改用整句字幕…' });
-      output = await transcriber(samples, { ...options, return_timestamps: true });
-      output.wordTimestamped = false;
-    }
+    const output = await recognizeWithQualityCheck(samples, async (audio, retry) => {
+      // Strong repetition controls apply only to a flagged retry, so normal speech
+      // can contain natural repeated words. Each retry is at most 16 seconds.
+      const options = { task: 'transcribe', chunk_length_s: retry ? 0 : 30, stride_length_s: 5,
+        ...(retry ? { repetition_penalty: 1.15, no_repeat_ngram_size: 10 } : {}) };
+      try {
+        const result = await transcriber(audio, { ...options, return_timestamps: 'word' });
+        return { ...result, wordTimestamped: true };
+      } catch {
+        self.postMessage({ type: 'status', message: '逐字時間戳無法取得，改用整句字幕…' });
+        const result = await transcriber(audio, { ...options, return_timestamps: true });
+        return { ...result, wordTimestamped: false };
+      }
+    }, progress => self.postMessage({ type: 'status', message: `偵測到疑似重複字幕，正在以短片段重新辨識… ${progress}%` }));
     self.postMessage({ type: 'result', output });
   } catch (error: any) {
     self.postMessage({
@@ -57,3 +62,4 @@ self.onmessage = async (event: MessageEvent<{ type?: 'prepare'; audio?: ArrayBuf
 };
 
 export {};
+

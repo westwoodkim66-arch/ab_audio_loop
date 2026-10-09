@@ -1,3 +1,5 @@
+import { WHISPER_RESULT_VERSION } from './whisperRecognition';
+
 const DATABASE = 'ab-loop-transcripts';
 const STORE = 'results';
 const VERSION = 2;
@@ -16,6 +18,7 @@ export interface TranscriptCacheEntry {
   lines?: any[];
   placeholderCount: number;
   segmentationVersion?: number;
+  recognitionVersion?: number;
 }
 
 export function transcriptMediaKey(value: string): string | null {
@@ -75,7 +78,8 @@ export async function readTranscriptCache(media: string, mode?: TranscriptMode, 
       request.onerror = () => reject(request.error);
     });
     const cached = entries.filter(entry => entry.key.startsWith(`[${VERSION},`) && entry.media === media && (!mode || entry.mode === mode)
-      && entry.requestedLanguage === requestedLanguage && Array.isArray(entry.raw) && entry.raw.length > 0)
+      && entry.requestedLanguage === requestedLanguage && Array.isArray(entry.raw) && entry.raw.length > 0
+      && (entry.mode !== 'generate' || entry.recognitionVersion === WHISPER_RESULT_VERSION))
       .sort((a, b) => b.savedAt - a.savedAt)[0] || null;
     // Keep the recognition result; only rebuild outdated sentence/translation pairs.
     return cached && cached.segmentationVersion !== SEGMENTATION_VERSION ? { ...cached, lines: undefined } : cached;
@@ -91,7 +95,8 @@ export async function writeTranscriptCache(entry: Omit<TranscriptCacheEntry, 'ke
       const transaction = db!.transaction(STORE, 'readwrite');
       const store = transaction.objectStore(STORE);
       // Translation and segmentation version are part of the key; old formats cannot leak in.
-      store.put({ ...entry, segmentationVersion: SEGMENTATION_VERSION, key: JSON.stringify([VERSION, entry.media, entry.language, entry.requestedLanguage, entry.mode, 'zh-Hant']), savedAt: Date.now() });
+      store.put({ ...entry, recognitionVersion: entry.mode === 'generate' ? WHISPER_RESULT_VERSION : undefined,
+        segmentationVersion: SEGMENTATION_VERSION, key: JSON.stringify([VERSION, entry.media, entry.language, entry.requestedLanguage, entry.mode, 'zh-Hant']), savedAt: Date.now() });
       const all = store.getAll();
       all.onsuccess = () => {
         const sorted = (all.result as TranscriptCacheEntry[]).sort((a, b) => b.savedAt - a.savedAt);
@@ -104,3 +109,4 @@ export async function writeTranscriptCache(entry: Omit<TranscriptCacheEntry, 'ke
   } catch { /* Private browsing, unavailable storage or quota: continue without cache. */ }
   finally { db?.close(); }
 }
+
