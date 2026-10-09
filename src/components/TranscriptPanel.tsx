@@ -645,6 +645,36 @@ ${JSON.stringify(chunk)}
       const stableKey = mediaKey || await resolveTranscriptMediaKey(audioUrl, job.controller.signal);
       checkJob(job);
       const cacheMedia = stableKey && region ? `${stableKey}|whisper:${region.start}:${region.end}` : stableKey;
+      const publishAlignment = async (measured: any[]) => {
+        const aligned = alignSuppliedTranscript(prepareReadableTranscript(referenceLines!), measured);
+        checkJob(job);
+        const completed: SubtitleLine[] = aligned.map((line: any) => ({
+          id: line.id, originalText: line.originalText,
+          translation: line.providedTranslation || line.translation || '',
+          startTime: line.startTime, endTime: line.endTime,
+          words: attachWordTimings(plainSubtitleWords(line.originalText), line.wordTimings),
+        }));
+        setLines(completed);
+        if (stableKey) await writeTranscriptCache({ media: stableKey, language: 'und', requestedLanguage,
+          mode: 'generate', raw: aligned, lines: completed, placeholderCount: 0 });
+        checkJob(job);
+        setStatusText('免費 Whisper 已補上時間軸，保留原文與翻譯；有完整逐字時間的句子會逐字提示，其餘整句提示。');
+        setIsProcessing(false);
+      };
+      if (cacheMedia && referenceLines && !refresh) {
+        const cached = await readTranscriptCache(cacheMedia, 'generate', requestedLanguage);
+        checkJob(job);
+        const measured = cached?.raw.flatMap((line: any) => line.wordTimings || []) || [];
+        if (measured.length) {
+          try {
+            await publishAlignment(measured);
+            return;
+          } catch (error: any) {
+            checkJob(job);
+            // A different supplied transcript may require a fresh complete recognition.
+          }
+        }
+      }
       if (cacheMedia && !referenceLines && !refresh) {
         const cached = await readTranscriptCache(cacheMedia, 'generate', requestedLanguage);
         checkJob(job);
@@ -707,16 +737,7 @@ ${JSON.stringify(chunk)}
         if (!output.wordTimestamped) throw new Error('Whisper 未能取得逐字時間戳，原字幕保留；請改用 AI 語音辨識取得整句字幕。');
         const measured = chunks.map((chunk: any) => ({ text: String(chunk.text || ''),
           startTime: Number(chunk.timestamp?.[0]), endTime: Number(chunk.timestamp?.[1]) }));
-        const aligned = alignSuppliedTranscript(prepareReadableTranscript(referenceLines), measured);
-        checkJob(job);
-        if (stableKey) await writeTranscriptCache({ media: stableKey, language: 'und', requestedLanguage, mode: 'generate', raw: aligned, placeholderCount: 0 });
-        checkJob(job);
-        const completed = await processTextWithGemini('', aligned, job);
-        if (stableKey && completed?.length && isCurrentJob(job)) {
-          await writeTranscriptCache({ media: stableKey, language: 'und', requestedLanguage,
-            mode: 'generate', raw: aligned, lines: completed, placeholderCount: 0 });
-        }
-        if (isCurrentJob(job)) setStatusText('字幕已對上語音時間：有完整時間的句子逐字提示，其餘以整句提示。');
+        await publishAlignment(measured);
         return;
       }
 
@@ -907,11 +928,12 @@ ${JSON.stringify(chunk)}
   };
 
   const synchronizeSuppliedSubtitles = () => {
-    if (!canReadAudio || !lines.length) return;
+    const importedSource = recognitionSourceRef.current?.media === audioUrl ? recognitionSourceRef.current.url : null;
+    if ((!canReadAudio && !importedSource) || !lines.length) return;
     const reference = lines.map(line => ({ ...line, startTime: line.startTime ?? -1,
       endTime: line.endTime ?? -1, providedTranslation: line.translation,
       wordTimings: undefined, words: undefined }));
-    void transcribeLocalWithWhisper(beginJob(), undefined, reference);
+    void transcribeLocalWithWhisper(beginJob(), undefined, reference, false, importedSource || audioUrl);
   };
 
   const [isPanelDragging, setIsPanelDragging] = useState(false);
@@ -1253,10 +1275,10 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
             <input type="file" ref={recognitionFileInputRef} onChange={handleRecognitionFile}
                accept="audio/*,video/mp4,video/webm,.mp4,.webm,.mov,.mp3,.m4a,.wav" className="hidden" />
             <button type="button" onClick={synchronizeSuppliedSubtitles}
-               disabled={isProcessing || !canReadAudio || !lines.length}
-               title="用免費 Whisper 取得實際語音時間，對齊已輸入的字幕；首次會下載模型"
+               disabled={isProcessing || (!canReadAudio && !recognitionFileName) || !lines.length}
+               title="對照目前音檔或匯入音軌，用免費 Whisper 補上字幕時間；保留原文及翻譯，不使用 Gemini"
                className="px-3 py-1.5 rounded-lg border border-[#7f5af0]/50 text-[#a78bfa] text-sm font-bold disabled:opacity-40 hover:bg-[#7f5af0]/10">
-               同步音檔字幕
+               AI 補上時間軸（免費）
             </button>
             <button type="button" onClick={loadWhisperRegion}
                disabled={isProcessing || !validRegion || !canReadAudio}
@@ -1375,9 +1397,9 @@ Return ONLY a valid JSON array of objects, containing "id" and "translation" fie
 
       {autoScroll && lines.length > 0 && !hasTimedLines && (
         <p role="status" className="px-4 py-2 text-sm text-[#a78bfa] border-t border-white/10">
-          這份文稿尚無時間戳，無法隨播放自動捲動。{canReadAudio
-            ? '請先按「同步音檔字幕」，取得實際語音時間後即可跟隨播放。'
-            : '請讀取影片字幕，或匯入含時間戳的 SRT／VTT 字幕。'}
+          這份文稿尚無時間戳，無法隨播放自動捲動。{canReadAudio || recognitionFileName
+            ? '請先按「AI 補上時間軸（免費）」，取得實際語音時間後即可跟隨播放。'
+            : '請先匯入同一影片的影片檔或音軌，使用免費 Whisper 補時間軸；也可匯入含時間戳的 SRT／VTT。'}
         </p>
       )}
       {lines.length > 0 && (
